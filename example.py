@@ -6,16 +6,23 @@ load_dotenv()
 
 async def main():
     a1 = Agent(
-        llm="gemini-3-pro-preview",
+        llm = "gemini-3-flash-preview",
         task=(
-            "Read my resume from the Desktop: RESUME.pdf. Then open Chrome, go to LinkedIn, "
-            "find an Easy Apply internship that fits my background, and apply by uploading "
-            "that same resume (Desktop/RESUME.pdf). Apply to exactly two internships."
+        """
+        Open LinkedIn Internships in the existing Chrome window and apply to the first job
+        for a suitable role using LinkedIn's “Easy Apply”  feature. Use my resume at 
+        `Desktop\RESUME.pdf`. You can read this resume to search for the role.
+
+        Requirements:
+        - Do not browse unnecessary jobs—pick the first relevant Easy Apply listing.
+        - When you reach any “Resume” step, Upload the resume to the job.
+        """
         ),
         verbose=True,
+        measure_latency=True,
     )
     await a1.run()
-
-
+ 
 if __name__ == "__main__":
     asyncio.run(main())
+ 

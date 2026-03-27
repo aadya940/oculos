@@ -3,6 +3,7 @@ import subprocess
 import platform
 import os
 import time
+from dataclasses import dataclass
 
 import pyautogui
 import base64
@@ -12,9 +13,113 @@ from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 from typing import Optional, Any, Dict, List
-from orbit._oculus_client import OculOS
+from .._oculus_client import OculOS
 
 oculos_client = OculOS()
+
+#
+# Speed: tiny TTL cache for discovery calls
+# -----------------------------------------
+# OculOS discovery calls are synchronous HTTP round-trips. We keep a short-lived cache
+# to avoid repeating identical calls back-to-back within the same UI state.
+
+
+_DISCOVERY_CACHE_TTL_SEC = 0.75
+
+
+@dataclass
+class _CacheEntry:
+    t: float
+    value: Any
+
+
+_discovery_cache: dict[tuple, _CacheEntry] = {}
+
+
+def _cache_get(key: tuple) -> Any:
+    ent = _discovery_cache.get(key)
+    if not ent:
+        return None
+    if (time.monotonic() - float(ent.t)) > _DISCOVERY_CACHE_TTL_SEC:
+        _discovery_cache.pop(key, None)
+        return None
+    return ent.value
+
+
+def _cache_set(key: tuple, value: Any) -> Any:
+    _discovery_cache[key] = _CacheEntry(t=time.monotonic(), value=value)
+    return value
+
+
+def _invalidate_discovery_cache() -> None:
+    # Keep it simple: any interaction likely changes the accessibility tree.
+    _discovery_cache.clear()
+
+
+def _norm_query(q: Optional[str]) -> Optional[str]:
+    if q is None:
+        return None
+    q = str(q)
+    q = " ".join(q.split())
+    return q if q else None
+
+
+def _cached_list_windows() -> list[dict]:
+    key = ("list_windows",)
+    hit = _cache_get(key)
+    if hit is not None:
+        return hit
+    return _cache_set(key, oculos_client.list_windows())
+
+
+def _cached_find_elements(
+    pid: int,
+    *,
+    query: Optional[str] = None,
+    element_type: Optional[str] = None,
+    interactive: Optional[bool] = None,
+) -> list[dict]:
+    key = (
+        "find_elements",
+        int(pid),
+        _norm_query(query),
+        str(element_type) if element_type is not None else None,
+        bool(interactive) if interactive is not None else None,
+    )
+    hit = _cache_get(key)
+    if hit is not None:
+        return hit
+    return _cache_set(
+        key,
+        oculos_client.find_elements(
+            int(pid), query=_norm_query(query), element_type=element_type, interactive=interactive
+        ),
+    )
+
+
+def _cached_find_elements_hwnd(
+    hwnd: int,
+    *,
+    query: Optional[str] = None,
+    element_type: Optional[str] = None,
+    interactive: Optional[bool] = None,
+) -> list[dict]:
+    key = (
+        "find_elements_hwnd",
+        int(hwnd),
+        _norm_query(query),
+        str(element_type) if element_type is not None else None,
+        bool(interactive) if interactive is not None else None,
+    )
+    hit = _cache_get(key)
+    if hit is not None:
+        return hit
+    return _cache_set(
+        key,
+        oculos_client.find_elements_hwnd(
+            int(hwnd), query=_norm_query(query), element_type=element_type, interactive=interactive
+        ),
+    )
 
 
 def list_active_windows() -> Dict[str, Any]:
@@ -26,7 +131,7 @@ def list_active_windows() -> Dict[str, Any]:
         dict: A list of dictionaries containing 'pid' and 'title' for each window.
     """
     try:
-        windows = oculos_client.list_windows()
+        windows = _cached_list_windows()
         return {"status": "success", "windows": windows}
     except Exception as e:
         return {"status": "error", "message": f"Failed to list windows: {str(e)}"}
@@ -196,7 +301,7 @@ def find_ui_elements(
             If True, only returns elements that can be clicked or typed into.
     """
     try:
-        elements = oculos_client.find_elements(
+        elements = _cached_find_elements(
             pid, query=query, element_type=element_type, interactive=interactive
         )
         if not elements:
@@ -227,7 +332,7 @@ def find_ui_elements_hwnd(
         interactive (bool, optional): If True, only returns interactive elements.
     """
     try:
-        elements = oculos_client.find_elements_hwnd(
+        elements = _cached_find_elements_hwnd(
             hwnd, query=query, element_type=element_type, interactive=interactive
         )
         if not elements:
@@ -409,6 +514,7 @@ async def interact_with_element(
 
     try:
         _do()
+        _invalidate_discovery_cache()
         return {
             "status": "success",
             "message": f"Successfully performed '{action}' on element {element_id}.",
@@ -420,8 +526,8 @@ async def interact_with_element(
         transient = any(code in msg for code in ("0x80004005", "0x80040201"))
         if transient:
             try:
-                await asyncio.sleep(0)
                 _do()
+                _invalidate_discovery_cache()
                 return {
                     "status": "success",
                     "message": f"Successfully performed '{action}' on element {element_id}' after retry.",
@@ -429,6 +535,165 @@ async def interact_with_element(
             except Exception as e2:
                 return {"status": "error", "message": f"Interaction failed: {str(e2)}"}
         return {"status": "error", "message": f"Interaction failed: {msg}"}
+
+
+def click_first(
+    pid: int,
+    query: str,
+    element_type: Optional[str] = "Button",
+    interactive: bool = True,
+    anchor_probe_query: Optional[str] = None,
+    allow_browser_chrome: bool = False,
+) -> Dict[str, Any]:
+    """
+    High-leverage composed action: optional short wait, then find once, then click once.
+
+    This is the most efficient “default” pattern for advancing flows:
+      (optional wait) -> find_ui_elements -> interact_with_element(click)
+
+    Args:
+        pid: window PID
+        query: label/text to find
+        element_type: defaults to Button to reduce search space
+        interactive: require clickability
+        anchor_probe_query: if provided, do a single cheap anchor probe before searching/clicking
+        allow_browser_chrome: if True, permit clicks on browser chrome (bookmarks/tabs/address bar).
+    """
+    def _is_browser_chrome_element(el: Dict[str, Any]) -> bool:
+        text = " ".join(
+            str(el.get(k) or "")
+            for k in ("name", "title", "label", "value", "text_content", "element_type")
+        ).lower()
+        chrome_markers = (
+            "address and search bar",
+            "bookmark",
+            "bookmarks",
+            "tab search",
+            "new tab",
+            "tab",
+            "extensions",
+            "profile",
+            "chrome toolbar",
+            "omnibox",
+        )
+        return any(marker in text for marker in chrome_markers)
+
+    try:
+        if anchor_probe_query:
+            # Single cheap probe; not a real "wait".
+            _cached_find_elements(pid, query=anchor_probe_query, interactive=True)
+
+        found = _cached_find_elements(
+            pid,
+            query=query,
+            element_type=element_type,
+            interactive=interactive,
+        )
+        if not found:
+            return {
+                "status": "error",
+                "message": f"No element found to click for query={query!r} type={element_type!r}.",
+            }
+        candidates = found
+        if not allow_browser_chrome:
+            filtered = [el for el in candidates if not _is_browser_chrome_element(el)]
+            if filtered:
+                candidates = filtered
+            elif any(_is_browser_chrome_element(el) for el in found):
+                return {
+                    "status": "error",
+                    "message": (
+                        "Refusing to click browser chrome (bookmarks/tabs/address bar). "
+                        "Use page-specific query or set allow_browser_chrome=True only when intentional."
+                    ),
+                    "matches_sample": [
+                        (el.get("name") or el.get("title") or el.get("label") or "")
+                        for el in found[:5]
+                    ],
+                }
+
+        element_id = candidates[0].get("oculos_id")
+        if not element_id:
+            return {
+                "status": "error",
+                "message": "Matched element missing oculos_id.",
+                "element": candidates[0],
+            }
+        oculos_client.click(str(element_id))
+        _invalidate_discovery_cache()
+        return {
+            "status": "success",
+            "message": f"Clicked first match for {query!r}.",
+            "element_id": str(element_id),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def type_into(
+    pid: int,
+    field_query: str,
+    text: str,
+    verify: bool = False,
+    element_type: str = "Edit",
+    interactive: bool = True,
+) -> Dict[str, Any]:
+    """
+    High-leverage composed action: find a text field once, set text, optionally verify.
+    """
+    try:
+        found = _cached_find_elements(
+            pid,
+            query=field_query,
+            element_type=element_type,
+            interactive=interactive,
+        )
+        if not found:
+            return {
+                "status": "error",
+                "message": f"Field not found for query={field_query!r} type={element_type!r}.",
+            }
+        element_id = found[0].get("oculos_id")
+        if not element_id:
+            return {
+                "status": "error",
+                "message": "Matched field missing oculos_id.",
+                "element": found[0],
+            }
+
+        oculos_client.set_text(str(element_id), str(text))
+        _invalidate_discovery_cache()
+
+        if not verify:
+            return {
+                "status": "success",
+                "message": f"Set text for {field_query!r}.",
+                "element_id": str(element_id),
+            }
+
+        # Re-find the same element id and check value/text_content best-effort.
+        refreshed = _cached_find_elements(
+            pid, element_type=element_type, interactive=interactive
+        )
+        for el in refreshed or []:
+            if str(el.get("oculos_id")) != str(element_id):
+                continue
+            v = el.get("value") or el.get("text_content") or ""
+            ok = str(text).strip() in str(v)
+            return {
+                "status": "success" if ok else "warning",
+                "message": "Typed and verified." if ok else "Typed but could not verify value.",
+                "element_id": str(element_id),
+                "observed_value": str(v)[:200],
+            }
+
+        return {
+            "status": "warning",
+            "message": "Typed, but could not re-locate the same field to verify.",
+            "element_id": str(element_id),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 def navigate_to_url(pid: int, url: str) -> Dict[str, Any]:
@@ -666,15 +931,6 @@ async def select_dropdown_option(
                     return _norm(option) in _norm(str(val))
             return False
 
-        # 3) Try selecting with verification; poll until conditions (no fixed sleeps)
-        async def _poll_until(check, timeout: float = 2.0) -> bool:
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                if check():
-                    return True
-                await asyncio.sleep(0)
-            return False
-
         def _find_opts():
             opts = oculos_client.find_elements(
                 pid, query=option, interactive=True, element_type="ListItem"
@@ -685,12 +941,19 @@ async def select_dropdown_option(
 
         for _attempt in range(3):
             oculos_client.click(dropdown_id)
-            await _poll_until(_find_opts, timeout=2.0)
+            await wait_for_element(
+                pid=pid,
+                query=option,
+                timeout=2,
+                interval=0.2,
+                max_polls=6,
+                interactive=True,
+            )
 
             opts = _find_opts()
             if opts:
                 oculos_client.click(opts[0]["oculos_id"])
-                if await _poll_until(_value_is_set, timeout=2.0):
+                if _value_is_set():
                     return {
                         "status": "success",
                         "message": f"Selected '{option}' from '{dropdown.get('label') or dropdown_query}'.",
@@ -703,7 +966,7 @@ async def select_dropdown_option(
                 opts = oculos_client.find_elements(pid, query=option, interactive=True)
             if opts:
                 oculos_client.click(opts[0]["oculos_id"])
-                if await _poll_until(_value_is_set, timeout=2.0):
+                if _value_is_set():
                     return {
                         "status": "success",
                         "message": f"Selected '{option}' from '{dropdown.get('label') or dropdown_query}'.",

@@ -1,16 +1,15 @@
-from google.adk.agents import Agent, LoopAgent
+from google.adk.agents import Agent
 from google.genai import types
 
 from google.adk.planners.built_in_planner import BuiltInPlanner
-from google.adk.tools import LongRunningFunctionTool, FunctionTool
+from google.adk.tools import AgentTool, LongRunningFunctionTool
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
-from google.adk.models.lite_llm import LiteLlm
-from google.adk.tools.exit_loop_tool import exit_loop
+from google.adk.models import Gemini, LiteLlm
 from typing import Optional
 
-from .prompts import SYSTEM_PROMPT, PARENT_SYSTEM_PROMPT, VERIFIER_SYSTEM_PROMPT
+from .prompts import SYSTEM_PROMPT, PARENT_SYSTEM_PROMPT
 from ._tools.ui import (
     list_active_windows,
     manage_window,
@@ -20,6 +19,8 @@ from ._tools.ui import (
     get_window_tree_hwnd,
     interact_with_element,
     wait_for_element,
+    click_first,
+    type_into,
     navigate_to_url,
     launch_and_get_pid,
     mouse_click,
@@ -65,12 +66,10 @@ from ._tools.hotkey import press_hotkey
 DEFAULT_DESKTOP_MODEL = "gemini-3-pro-preview"
 DEFAULT_PLANNER_MODEL = "gemini-3-pro-preview"
 
-DESKTOP_EXECUTOR_AGENT_NAME = "desktop_executor"
-VERIFIER_AGENT_NAME = "desktop_verifier"
-LOOP_DESKTOP_AGENT_NAME = "desktop_agent"
+DESKTOP_EXECUTOR_AGENT_NAME = "desktop_agent"
 
 
-def make_lite_llm(model: str) -> LiteLlm:
+def make_lite_llm(model: str):
     """
     Create an ADK LiteLlm from the user-provided model string.
 
@@ -79,8 +78,20 @@ def make_lite_llm(model: str) -> LiteLlm:
     `gemini-3-pro-preview` into `gemini/gemini-3-pro-preview` (provider prefix).
     For any already provider-prefixed model (contains `/`), we pass it through unchanged.
     """
-    if "/" not in (model or "") and model.startswith("gemini-"):
-        model = f"gemini/{model}"
+    m = (model or "").strip()
+    # Use ADK native Gemini to preserve thought signatures/tool-calling behavior.
+    # Accept common forms:
+    # - gemini-3-pro-preview
+    # - gemini/gemini-3-pro-preview
+    # - google/gemini-3-pro-preview
+    # - openrouter/google/gemini-3-pro-preview-customtools
+    if "gemini-" in m:
+        if m.startswith("gemini-"):
+            return Gemini(model=m)
+        parts = [p for p in m.split("/") if p]
+        for part in reversed(parts):
+            if part.startswith("gemini-"):
+                return Gemini(model=part)
     return LiteLlm(model)
 
 
@@ -88,94 +99,56 @@ async def inject_screenshot_callback(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> None:
     """
-    Finds screenshot artifacts in tool responses and injects
+    Finds screenshot artifacts in the most recent tool responses and injects
     them as inline images so the model can actually see them.
     """
-    for content in llm_request.contents:
-        if not content.parts:
-            continue
-        for part in content.parts:
-            if (
-                hasattr(part, "function_response")
-                and part.function_response
-                and part.function_response.name == "take_screenshot"
-            ):
-
-                response = part.function_response.response
-                if response.get("status") == "success":
-                    # Load the artifact
-                    artifact = await callback_context.load_artifact("screenshot.jpg")
-                    if artifact and artifact.inline_data:
-                        # Inject image into model context
-                        llm_request.contents.append(
-                            types.Content(
-                                role="user",
-                                parts=[
-                                    types.Part(
-                                        inline_data=types.Blob(
-                                            mime_type="image/jpeg",
-                                            data=artifact.inline_data.data,
-                                        )
-                                    ),
-                                    types.Part(
-                                        text="This is the current screenshot. Use mouse_click(x, y) to interact with what you see."
-                                    ),
-                                ],
-                            )
+    if not llm_request.contents:
+        return None
+    content = llm_request.contents[-1]
+    if not content.parts:
+        return None
+    for part in content.parts:
+        if (
+            hasattr(part, "function_response")
+            and part.function_response
+            and part.function_response.name == "take_screenshot"
+        ):
+            response = part.function_response.response
+            if response.get("status") == "success":
+                artifact = await callback_context.load_artifact("screenshot.jpg")
+                if artifact and artifact.inline_data:
+                    llm_request.contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part(
+                                    inline_data=types.Blob(
+                                        mime_type="image/jpeg",
+                                        data=artifact.inline_data.data,
+                                    )
+                                ),
+                                types.Part(
+                                    text="This is the current screenshot. Use mouse_click(x, y) to interact with what you see."
+                                ),
+                            ],
                         )
-    return None
-
-
-async def inject_journal_callback(
-    callback_context: CallbackContext, llm_request: LlmRequest
-) -> None:
-    journal = callback_context.state.get("journal") or {}
-
-    # The runner caps the journal size, but keep the injected text compact too.
-    journal_text = (
-        "OS Action Journal (attempt-scoped evidence):\n"
-        f"core_key: {journal.get('core_key')}\n"
-        f"phase_instruction: {journal.get('phase_instruction')}\n"
-        f"llm_start: {journal.get('llm_start')}\n"
-        f"llm_end: {journal.get('llm_end')}\n"
-        f"actions: {journal.get('actions')}\n"
-        f"errors: {journal.get('errors')}\n"
-    )
-
-    llm_request.contents.append(
-        types.Content(
-            role="user",
-            parts=[types.Part(text=journal_text)],
-        )
-    )
+                    )
     return None
 
 
 def capture_phase_instruction_before_agent_callback(
     callback_context: CallbackContext,
 ) -> None:
-    # transfer_to_agent should provide the phase instruction via user_content.
+    # Planner invokes desktop_agent via AgentTool; phase text arrives as user_content.
     user_content = callback_context.user_content
     phase_text = ""
     if user_content and user_content.parts:
         phase_text = getattr(user_content.parts[0], "text", "") or ""
     callback_context.state["journal_phase_instruction"] = phase_text
-    # Initialize placeholder so the verifier always has a value to read.
-    callback_context.state.setdefault(
-        "journal",
-        {
-            "core_key": "desktop_attempt_pending",
-            "phase_instruction": phase_text,
-            "llm_start": [],
-            "llm_end": [],
-            "actions": [],
-            "errors": [],
-        },
-    )
     return None
 
 
-_model_args = types.ThinkingConfig(thinking_budget=-1)
+_model_args = types.ThinkingConfig(thinking_budget=512)
 _planner = BuiltInPlanner(thinking_config=_model_args)
 
 
@@ -185,10 +158,6 @@ def system_prompt_provider(context: ReadonlyContext) -> str:
 
 def parent_prompt_provider(context: ReadonlyContext) -> str:
     return PARENT_SYSTEM_PROMPT
-
-
-def verifier_prompt_provider(context: ReadonlyContext) -> str:
-    return VERIFIER_SYSTEM_PROMPT
 
 
 def build_desktop_agent(desktop_model: str) -> Agent:
@@ -205,6 +174,8 @@ def build_desktop_agent(desktop_model: str) -> Agent:
         tools=[
             list_active_windows,
             manage_window,
+            click_first,
+            type_into,
             find_ui_elements,
             find_ui_elements_hwnd,
             get_window_tree,
@@ -243,36 +214,22 @@ def build_desktop_agent(desktop_model: str) -> Agent:
             LongRunningFunctionTool(upload_file_approval),
             LongRunningFunctionTool(request_human),
         ],
-        planner=_planner,
-    )
-
-
-def build_verifier_agent(verifier_model: str) -> Agent:
-    return Agent(
-        model=make_lite_llm(verifier_model),
-        name=VERIFIER_AGENT_NAME,
-        description="Verifier: decides retry vs success based on the OS Action Journal.",
-        instruction=verifier_prompt_provider,
-        before_model_callback=inject_journal_callback,
-        tools=[
-            LongRunningFunctionTool(request_human),
-            FunctionTool(exit_loop),
-        ],
     )
 
 
 def build_parent_agent(
     planner_model: str,
-    loop_desktop_agent: Agent,
+    desktop_agent: Agent,
 ) -> Agent:
+    desktop_tool = AgentTool(desktop_agent)
     return Agent(
         model=make_lite_llm(planner_model),
         name="planner",
+        planner=_planner,
         description="""High-level planner that breaks goals into phases and delegates desktop automation to desktop_agent.
-        This agent is responsible for breaking down the user's goal into clear phases and delegating the tasks to the desktop_agent.""",
+        This agent is responsible for breaking down the user's goal into clear phases and delegating the tasks to the desktop_agent tool.""",
         instruction=parent_prompt_provider,
-        tools=[duckduckgo_search],
-        sub_agents=[loop_desktop_agent],
+        tools=[duckduckgo_search, desktop_tool],
     )
 
 
@@ -280,27 +237,11 @@ def build_agents(
     *,
     desktop_model: str = DEFAULT_DESKTOP_MODEL,
     planner_model: str = DEFAULT_PLANNER_MODEL,
-    verifier_model: Optional[str] = None,
-    max_retries_per_step: int = 3,
 ) -> tuple[Agent, Agent]:
     """Return (parent_agent, desktop_agent) for the requested model strings."""
-    desktop_executor = build_desktop_agent(desktop_model)
-    if verifier_model is None:
-        verifier_model = planner_model
-    verifier_agent = build_verifier_agent(verifier_model)
-
-    loop_desktop_agent = LoopAgent(
-        name=LOOP_DESKTOP_AGENT_NAME,
-        description="Retrying desktop phase runner (desktop_executor -> verifier).",
-        sub_agents=[desktop_executor, verifier_agent],
-        max_iterations=max_retries_per_step,
-    )
-
-    parent_agent = build_parent_agent(
-        planner_model,
-        loop_desktop_agent,
-    )
-    return parent_agent, loop_desktop_agent
+    desktop_agent = build_desktop_agent(desktop_model)
+    parent_agent = build_parent_agent(planner_model, desktop_agent)
+    return parent_agent, desktop_agent
 
 
 parent_agent, desktop_agent = build_agents()

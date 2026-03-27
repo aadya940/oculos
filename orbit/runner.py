@@ -18,6 +18,9 @@ from .agents import (
 )
 from .daemon import OculOSManager
 from ._tools.hitl import APPROVAL_TOOLS
+
+# Payload-based pending tools: disk approvals + request_human (not in APPROVAL_TOOLS impl map).
+_PENDING_PAYLOAD_TOOLS = frozenset(APPROVAL_TOOLS.keys()) | {"request_human"}
 from ._ui import default_human_in_the_loop
 from .journal import Journal
 
@@ -119,7 +122,7 @@ def _maybe_enqueue_pending_response(
             )
         return False
     tool = resp.get("tool")
-    if not isinstance(tool, str) or tool not in APPROVAL_TOOLS:
+    if not isinstance(tool, str) or tool not in _PENDING_PAYLOAD_TOOLS:
         if debug:
             print(
                 _console_safe(
@@ -223,8 +226,6 @@ class Agent:
         llm: str = "gemini-3-pro-preview",
         desktop_llm: Optional[str] = None,
         planner_llm: Optional[str] = None,
-        verifier_llm: Optional[str] = None,
-        max_retries_per_step: int = 3,
         measure_latency: bool = True,
         verbose: bool = False,
         human_in_the_loop: Optional[HumanInTheLoopHandler] = None,
@@ -233,8 +234,6 @@ class Agent:
         self.llm = llm
         self.desktop_llm = desktop_llm
         self.planner_llm = planner_llm
-        self.verifier_llm = verifier_llm
-        self.max_retries_per_step = max_retries_per_step
         self.measure_latency = measure_latency
         self.verbose = verbose
         self._human_in_the_loop = human_in_the_loop
@@ -257,8 +256,7 @@ class Agent:
             app_name="desktop_app", user_id="local_admin", session_id="session_001"
         )
 
-        # Ephemeral, attempt-scoped OS Action Journal for the verifier agent
-        # (stored in session.state so the verifier can read it).
+        # Ephemeral, attempt-scoped OS Action Journal for debugging/inspection.
         journal = Journal(core_key="desktop_attempt_0")
         desktop_attempt_idx = 0
         journal_active = False
@@ -275,24 +273,14 @@ class Agent:
             desktop_model = self.llm
         if planner_model is None and "/" in (self.llm or ""):
             planner_model = self.llm
-        verifier_model = self.verifier_llm
-        # Backwards compatible default:
-        # - If verifier_llm not provided, verifier should follow planner_llm.
-        # - If planner_llm is also unset, build_agents will fall back to defaults.
-        if verifier_model is None:
-            verifier_model = planner_model
 
         build_kwargs: dict[str, str] = {}
         if desktop_model is not None:
             build_kwargs["desktop_model"] = desktop_model
         if planner_model is not None:
             build_kwargs["planner_model"] = planner_model
-        if verifier_model is not None:
-            build_kwargs["verifier_model"] = verifier_model
 
-        parent_agent, _desktop_agent = build_agents(
-            **build_kwargs, max_retries_per_step=self.max_retries_per_step
-        )
+        parent_agent, _desktop_agent = build_agents(**build_kwargs)
 
         runner = Runner(
             agent=parent_agent,
@@ -339,12 +327,10 @@ class Agent:
                         seen_ids.add(fc.id)
                         pending.append((fc, fr))
 
-                if event.is_final_response():
-                    if latency:
-                        latency.on_final_response()
-                    if getattr(event, "content", None) and event.content.parts:
-                        print(f"\n{_console_safe(event.content.parts[0].text)}")
-                elif getattr(event, "content", None) and event.content.parts:
+                # Process tool parts on every event, including final_response events.
+                # If we only handled parts when not is_final_response(), pending HITL
+                # responses attached to a final event were never seen and the toast never ran.
+                if getattr(event, "content", None) and event.content.parts:
                     for part in event.content.parts:
                         if getattr(part, "function_call", None):
                             now = time.time()
@@ -431,6 +417,14 @@ class Agent:
                             _last = time.time()
                     if pause_for_approval:
                         break
+
+                if event.is_final_response():
+                    if latency:
+                        latency.on_final_response()
+                    if getattr(event, "content", None) and event.content.parts:
+                        first = event.content.parts[0]
+                        if getattr(first, "text", None) is not None:
+                            print(f"\n{_console_safe(first.text)}")
                 if pause_for_approval:
                     break
 
