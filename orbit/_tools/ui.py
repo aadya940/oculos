@@ -126,6 +126,32 @@ def _cached_find_elements_hwnd(
     )
 
 
+def _slim_element(el: dict) -> dict:
+    """Strip an element dict to the fields the LLM needs."""
+    slim = {"oculos_id": el.get("oculos_id")}
+    if el.get("element_type"):
+        slim["element_type"] = el["element_type"]
+    for key in ("name", "title", "label"):
+        val = el.get(key)
+        if val:
+            slim[key] = val
+    for key in ("value", "text_content"):
+        val = el.get(key)
+        if val:
+            slim[key] = val
+    for key in ("checked", "toggle_state", "is_selected"):
+        val = el.get(key)
+        if val is not None:
+            slim[key] = val
+    if el.get("is_enabled") is False:
+        slim["is_enabled"] = False
+    return slim
+
+
+def _slim_elements(elements: list[dict]) -> list[dict]:
+    return [_slim_element(el) for el in elements]
+
+
 def list_active_windows() -> Dict[str, Any]:
     """
     Retrieves a list of all currently visible desktop windows.
@@ -318,7 +344,7 @@ def find_ui_elements(
             eid = el.get("oculos_id")
             if eid:
                 _element_meta[eid] = {"pid": pid, "query": query, "element_type": element_type}
-        return {"status": "success", "elements": elements}
+        return {"status": "success", "elements": _slim_elements(elements)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to find elements: {str(e)}"}
 
@@ -391,7 +417,7 @@ def find_ui_elements_hwnd(
                 "message": "No elements found matching the criteria.",
                 "elements": [],
             }
-        return {"status": "success", "elements": elements}
+        return {"status": "success", "elements": _slim_elements(elements)}
     except Exception as e:
         return {
             "status": "error",
