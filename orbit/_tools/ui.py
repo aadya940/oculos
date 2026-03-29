@@ -26,6 +26,10 @@ oculos_client = OculOS()
 
 _DISCOVERY_CACHE_TTL_SEC = 0.75
 
+# Maps oculos_id → {pid, query, element_type} so interact_with_element can
+# re-find an element automatically when its ID goes stale between calls.
+_element_meta: dict[str, dict] = {}
+
 
 @dataclass
 class _CacheEntry:
@@ -310,9 +314,55 @@ def find_ui_elements(
                 "message": "No elements found matching the criteria.",
                 "elements": [],
             }
+        for el in elements:
+            eid = el.get("oculos_id")
+            if eid:
+                _element_meta[eid] = {"pid": pid, "query": query, "element_type": element_type}
         return {"status": "success", "elements": elements}
     except Exception as e:
         return {"status": "error", "message": f"Failed to find elements: {str(e)}"}
+
+
+def fill_form_fields(
+    pid: int,
+    field_labels: List[str],
+    field_values: List[str],
+) -> Dict[str, Any]:
+    """
+    Fill multiple form fields in a single tool call.
+
+    Instead of calling find_ui_elements + interact_with_element for each field,
+    pass all fields at once as parallel lists.
+
+    Args:
+        pid (int): Process ID of the window containing the form.
+        field_labels (list[str]): Field labels/queries in order —
+            e.g. ["First name", "Last name", "Phone number"]
+        field_values (list[str]): Values to type, matching the labels by index —
+            e.g. ["Jane", "Doe", "555-0100"]
+
+    Returns:
+        dict with "filled" (succeeded), "errors" (failed), and "status".
+    """
+    if len(field_labels) != len(field_values):
+        return {"status": "error", "message": "field_labels and field_values must be the same length."}
+    filled: Dict[str, str] = {}
+    errors: Dict[str, str] = {}
+    for label, value in zip(field_labels, field_values):
+        try:
+            elements = oculos_client.find_elements(pid, query=str(label), interactive=True)
+            if not elements:
+                errors[label] = "element not found"
+                continue
+            eid = elements[0]["oculos_id"]
+            _element_meta[eid] = {"pid": pid, "query": str(label), "element_type": None}
+            oculos_client.set_text(eid, str(value))
+            filled[label] = value
+        except Exception as e:
+            errors[label] = str(e)
+    _invalidate_discovery_cache()
+    status = "success" if not errors else ("partial" if filled else "error")
+    return {"status": status, "filled": filled, "errors": errors}
 
 
 def find_ui_elements_hwnd(
@@ -482,59 +532,97 @@ async def interact_with_element(
         range_value (float, optional): Required ONLY for 'set_range'.
     """
 
-    def _do() -> None:
+    def _do(eid: str) -> None:
         if action == "click":
-            oculos_client.click(element_id)
+            oculos_client.click(eid)
         elif action == "set_text" and text_input is not None:
-            oculos_client.set_text(element_id, text_input)
+            oculos_client.set_text(eid, text_input)
         elif action == "send_keys" and text_input is not None:
-            oculos_client.send_keys(element_id, text_input)
+            oculos_client.send_keys(eid, text_input)
         elif action == "focus":
-            oculos_client.focus(element_id)
+            oculos_client.focus(eid)
         elif action == "toggle":
-            oculos_client.toggle(element_id)
+            oculos_client.toggle(eid)
         elif action == "expand":
-            oculos_client.expand(element_id)
+            oculos_client.expand(eid)
         elif action == "collapse":
-            oculos_client.collapse(element_id)
+            oculos_client.collapse(eid)
         elif action == "select":
-            oculos_client.select(element_id)
+            oculos_client.select(eid)
         elif action == "set_range" and range_value is not None:
-            oculos_client.set_range(element_id, range_value)
+            oculos_client.set_range(eid, range_value)
         elif action == "scroll" and scroll_direction is not None:
-            oculos_client.scroll(element_id, scroll_direction)
+            oculos_client.scroll(eid, scroll_direction)
         elif action == "scroll_into_view":
-            oculos_client.scroll_into_view(element_id)
+            oculos_client.scroll_into_view(eid)
         elif action == "highlight":
-            oculos_client.highlight(element_id)
+            oculos_client.highlight(eid)
         else:
             raise ValueError(
                 f"Invalid action '{action}' or missing required parameters."
             )
 
+    def _post_state_str(eid: str) -> str:
+        """Return element state as a plain string so it stays in the message field."""
+        meta = _element_meta.get(eid) or _element_meta.get(element_id)
+        if not meta or not meta.get("query"):
+            return ""
+        try:
+            fresh = oculos_client.find_elements(
+                meta["pid"],
+                query=meta["query"],
+                element_type=meta.get("element_type"),
+            )
+            if fresh:
+                el = fresh[0]
+                parts = [
+                    f"{k}={el[k]}"
+                    for k in ("toggle_state", "checked", "value", "is_selected", "is_enabled")
+                    if el.get(k) is not None
+                ]
+                return (" | " + ", ".join(parts)) if parts else ""
+        except Exception:
+            pass
+        return ""
+
+    # Attempt 1 — direct
     try:
-        _do()
+        _do(element_id)
         _invalidate_discovery_cache()
-        return {
-            "status": "success",
-            "message": f"Successfully performed '{action}' on element {element_id}.",
-        }
+        return {"status": "success", "message": f"Performed '{action}' on {element_id}.{_post_state_str(element_id)}"}
     except Exception as e:
-        # UIA/COM transient failures can happen if the page rerenders between
-        # element discovery and interaction (common on LinkedIn).
         msg = str(e)
-        transient = any(code in msg for code in ("0x80004005", "0x80040201"))
-        if transient:
-            try:
-                _do()
+
+    # Attempt 2 — transient COM error, retry same ID
+    com_transient = any(code in msg for code in ("0x80004005", "0x80040201"))
+    if com_transient:
+        try:
+            _do(element_id)
+            _invalidate_discovery_cache()
+            return {"status": "success", "message": f"Performed '{action}' on {element_id} after COM retry.{_post_state_str(element_id)}"}
+        except Exception as e2:
+            msg = str(e2)
+
+    # Attempt 3 — stale element: re-find by cached query and retry
+    meta = _element_meta.get(element_id)
+    if meta and meta.get("query"):
+        try:
+            fresh = oculos_client.find_elements(
+                meta["pid"],
+                query=meta["query"],
+                element_type=meta.get("element_type"),
+                interactive=True,
+            )
+            if fresh:
+                fresh_id = fresh[0]["oculos_id"]
+                _element_meta[fresh_id] = meta
+                _do(fresh_id)
                 _invalidate_discovery_cache()
-                return {
-                    "status": "success",
-                    "message": f"Successfully performed '{action}' on element {element_id}' after retry.",
-                }
-            except Exception as e2:
-                return {"status": "error", "message": f"Interaction failed: {str(e2)}"}
-        return {"status": "error", "message": f"Interaction failed: {msg}"}
+                return {"status": "success", "message": f"Performed '{action}' after re-finding stale element.{_post_state_str(fresh_id)}"}
+        except Exception as e3:
+            msg = str(e3)
+
+    return {"status": "error", "message": f"Interaction failed: {msg}"}
 
 
 def click_first(
@@ -696,6 +784,14 @@ def type_into(
         return {"status": "error", "message": str(e)}
 
 
+def _nav_url_norm(u: str) -> str:
+    u = u.strip().lower()
+    for prefix in ("https://", "http://"):
+        if u.startswith(prefix):
+            u = u[len(prefix):]
+    return u.rstrip("/")
+
+
 def navigate_to_url(pid: int, url: str) -> Dict[str, Any]:
     try:
         oculos_client.focus_window(pid)
@@ -706,16 +802,36 @@ def navigate_to_url(pid: int, url: str) -> Dict[str, Any]:
             return {"status": "error", "message": "Address bar not found."}
 
         address_bar_id = elements[0]["oculos_id"]
-
-        # Click to focus, select all existing content, replace with new URL
         oculos_client.click(address_bar_id)
-        oculos_client.set_text(address_bar_id, url)  # set_text replaces entirely
+        oculos_client.set_text(address_bar_id, url)
         oculos_client.send_keys(address_bar_id, "{ENTER}")
 
-        return {
-            "status": "success",
-            "message": f"Navigated to {url}. Call wait_for_element to confirm page loaded. Do NOT call press_hotkey or interact_with_element after this.",
-        }
+        # Wait for the address bar to reflect the target URL (navigation started),
+        # then hold for a short render window. This collapses the common
+        # navigate → wait_for_element pattern into a single tool call.
+        target_norm = _nav_url_norm(url)[:50]
+        deadline = time.time() + 8.0
+        navigated = False
+        while time.time() < deadline:
+            time.sleep(0.25)
+            try:
+                bars = oculos_client.find_elements(
+                    pid, query="Address and search bar", interactive=True
+                )
+                if bars:
+                    bar_val = bars[0].get("value") or bars[0].get("text_content") or ""
+                    if _nav_url_norm(bar_val)[:50].startswith(target_norm[:30]):
+                        navigated = True
+                        break
+            except Exception:
+                pass
+
+        # Short render wait after URL appears (SPA hydration, dynamic content)
+        time.sleep(0.8)
+        _invalidate_discovery_cache()
+
+        status = "navigated" if navigated else "navigation_sent"
+        return {"status": "success", "message": f"Navigated to {url} ({status}) — page is ready."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -754,7 +870,7 @@ async def take_screenshot(tool_context: ToolContext) -> Dict[str, Any]:
         await tool_context.save_artifact(filename="screenshot.jpg", artifact=artifact)
         return {
             "status": "success",
-            "message": "Screenshot saved. Analyze it and use mouse_click(x, y) to interact.",
+            "message": "Screenshot saved.",
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

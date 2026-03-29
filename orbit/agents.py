@@ -2,17 +2,24 @@ from google.adk.agents import Agent
 from google.genai import types
 
 from google.adk.planners.built_in_planner import BuiltInPlanner
-from google.adk.tools import AgentTool, LongRunningFunctionTool
+from google.adk.tools import AgentTool
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
 from google.adk.models import Gemini, LiteLlm
+from google.genai.errors import ClientError
 from typing import Optional
+import json
+import os
+import tempfile
+import traceback
 
 from .prompts import SYSTEM_PROMPT, PARENT_SYSTEM_PROMPT
 from ._tools.ui import (
     list_active_windows,
     manage_window,
+    fill_form_fields,
     find_ui_elements,
     find_ui_elements_hwnd,
     get_window_tree,
@@ -23,8 +30,6 @@ from ._tools.ui import (
     type_into,
     navigate_to_url,
     launch_and_get_pid,
-    mouse_click,
-    mouse_type,
     take_screenshot,
     scroll_page,
     get_form_fields,
@@ -63,8 +68,8 @@ from ._tools.hitl import (
 )
 from ._tools.hotkey import press_hotkey
 
-DEFAULT_DESKTOP_MODEL = "gemini-3-pro-preview"
-DEFAULT_PLANNER_MODEL = "gemini-3-pro-preview"
+DEFAULT_DESKTOP_MODEL = "gemini-3-flash-preview"
+DEFAULT_PLANNER_MODEL = "gemini-3-flash-preview"
 
 DESKTOP_EXECUTOR_AGENT_NAME = "desktop_agent"
 
@@ -95,13 +100,83 @@ def make_lite_llm(model: str):
     return LiteLlm(model)
 
 
+_DUMP_DIR = os.path.join(tempfile.gettempdir(), "orbit_llm_dumps")
+_call_counter = 0
+
+
+def _dump_llm_request(llm_request: LlmRequest, tag: str = "") -> str:
+    """Serialize an LlmRequest to a JSON file for debugging 400 errors."""
+    global _call_counter
+    _call_counter += 1
+    os.makedirs(_DUMP_DIR, exist_ok=True)
+    path = os.path.join(_DUMP_DIR, f"call_{_call_counter:04d}_{tag}.json")
+    try:
+        payload = {
+            "call_number": _call_counter,
+            "tag": tag,
+            "model": getattr(llm_request, "model", None),
+            "num_contents": len(llm_request.contents) if llm_request.contents else 0,
+            "contents_summary": [],
+            "config_keys": [],
+            "sys_instruction_len": 0,
+            "num_tools": 0,
+        }
+        if llm_request.contents:
+            for i, c in enumerate(llm_request.contents):
+                parts_info = []
+                for p in (c.parts or []):
+                    if getattr(p, "text", None) is not None:
+                        parts_info.append({"type": "text", "len": len(p.text), "preview": p.text[:200]})
+                    elif getattr(p, "function_call", None):
+                        parts_info.append({"type": "function_call", "name": p.function_call.name})
+                    elif getattr(p, "function_response", None):
+                        parts_info.append({"type": "function_response", "name": p.function_response.name})
+                    elif getattr(p, "inline_data", None):
+                        parts_info.append({"type": "inline_data", "mime": getattr(p.inline_data, "mime_type", "?")})
+                    else:
+                        parts_info.append({"type": "other"})
+                payload["contents_summary"].append({"index": i, "role": c.role, "parts": parts_info})
+        if llm_request.config:
+            cfg = llm_request.config
+            if cfg.system_instruction:
+                si = cfg.system_instruction
+                if isinstance(si, str):
+                    payload["sys_instruction_len"] = len(si)
+                elif hasattr(si, "parts") and si.parts:
+                    payload["sys_instruction_len"] = sum(len(getattr(p, "text", "") or "") for p in si.parts)
+            if cfg.tools:
+                total_decls = 0
+                for t in cfg.tools:
+                    if hasattr(t, "function_declarations") and t.function_declarations:
+                        total_decls += len(t.function_declarations)
+                payload["num_tools"] = total_decls
+            payload["config_keys"] = [k for k, v in (cfg.model_dump(exclude_none=True) if hasattr(cfg, "model_dump") else {}).items() if v is not None]
+            # Dump the FULL config as JSON for diagnosis
+            try:
+                payload["full_config"] = cfg.model_dump(exclude_none=True) if hasattr(cfg, "model_dump") else str(cfg)
+            except Exception:
+                payload["full_config"] = str(cfg)
+        with open(path, "w", encoding="utf-8", errors="replace") as f:
+            json.dump(payload, f, indent=2, default=str)
+        print(f"[DIAG] Dumped LLM request #{_call_counter} ({tag}) -> {path}")
+        print(f"[DIAG]   model={payload['model']} contents={payload['num_contents']} "
+              f"sys_len={payload['sys_instruction_len']} tools={payload['num_tools']} "
+              f"config_keys={payload['config_keys']}")
+    except Exception as e:
+        print(f"[DIAG] Failed to dump request: {e}")
+    return path
+
+
 async def inject_screenshot_callback(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> None:
     """
     Finds screenshot artifacts in the most recent tool responses and injects
     them as inline images so the model can actually see them.
+    Also dumps every request for debugging 400 errors.
     """
+    _dump_llm_request(llm_request, tag="desktop_before_model")
+
     if not llm_request.contents:
         return None
     content = llm_request.contents[-1]
@@ -128,7 +203,7 @@ async def inject_screenshot_callback(
                                     )
                                 ),
                                 types.Part(
-                                    text="This is the current screenshot. Use mouse_click(x, y) to interact with what you see."
+                                    text="This is the current screenshot."
                                 ),
                             ],
                         )
@@ -148,8 +223,8 @@ def capture_phase_instruction_before_agent_callback(
     return None
 
 
-_model_args = types.ThinkingConfig(thinking_budget=512)
-_planner = BuiltInPlanner(thinking_config=_model_args)
+_planner = BuiltInPlanner(thinking_config=types.ThinkingConfig(thinking_budget=512))
+
 
 
 def system_prompt_provider(context: ReadonlyContext) -> str:
@@ -160,23 +235,58 @@ def parent_prompt_provider(context: ReadonlyContext) -> str:
     return PARENT_SYSTEM_PROMPT
 
 
+def _handle_model_error(
+    callback_context: CallbackContext,
+    llm_request: LlmRequest,
+    error: Exception,
+) -> Optional[LlmResponse]:
+    """Handle 400 INVALID_ARGUMENT by dumping the full request for diagnosis."""
+    is_400 = isinstance(error, ClientError) and getattr(error, "code", None) == 400
+    path = _dump_llm_request(llm_request, tag="ERROR_400" if is_400 else "ERROR_other")
+    print(f"[ERROR-CB] Model error: {type(error).__name__}: {error}")
+    print(f"[ERROR-CB] Full request dumped to: {path}")
+    if is_400:
+        # Dump the FULL serialized config to see exactly what Gemini rejects
+        try:
+            err_path = os.path.join(_DUMP_DIR, f"call_{_call_counter:04d}_FULL_CONFIG.json")
+            full = {}
+            if llm_request.config and hasattr(llm_request.config, "model_dump"):
+                full["config"] = llm_request.config.model_dump(mode="json")
+            if llm_request.contents:
+                full["contents"] = [
+                    c.model_dump(mode="json", exclude_none=True)
+                    for c in llm_request.contents
+                ]
+            full["model"] = getattr(llm_request, "model", None)
+            with open(err_path, "w", encoding="utf-8", errors="replace") as f:
+                json.dump(full, f, indent=2, default=str)
+            print(f"[ERROR-CB] Full config+contents JSON: {err_path}")
+        except Exception as dump_err:
+            print(f"[ERROR-CB] Failed to dump full config: {dump_err}")
+            traceback.print_exc()
+    # Re-raise — don't swallow the error, just log it
+    return None
+
+
 def build_desktop_agent(desktop_model: str) -> Agent:
     return Agent(
         model=make_lite_llm(desktop_model),
         name=DESKTOP_EXECUTOR_AGENT_NAME,
-        description="""Handles all desktop UI automation: browser control, forms, dropdowns, 
-        file uploads, job applications (LinkedIn Easy Apply, Indeed). 
+        description="""Handles all desktop UI automation: browser control, forms, dropdowns,
+        file uploads, job applications (LinkedIn Easy Apply, Indeed).
         Delegate any phase that requires interacting with the screen or apps to this agent.
         This agent is responsible for all the desktop UI automation tasks.""",
         instruction=system_prompt_provider,
         before_model_callback=inject_screenshot_callback,
         before_agent_callback=capture_phase_instruction_before_agent_callback,
+        on_model_error_callback=_handle_model_error,
         tools=[
             list_active_windows,
             manage_window,
             click_first,
             type_into,
             find_ui_elements,
+            fill_form_fields,
             find_ui_elements_hwnd,
             get_window_tree,
             get_window_tree_hwnd,
@@ -190,29 +300,29 @@ def build_desktop_agent(desktop_model: str) -> Agent:
             clipboard_set,
             list_directory,
             duckduckgo_search,
-            LongRunningFunctionTool(move_file_approval),
-            LongRunningFunctionTool(move_files_approval),
-            LongRunningFunctionTool(create_directory_and_move_approval),
-            LongRunningFunctionTool(write_file_approval),
+            move_file_approval,
+            move_files_approval,
+            create_directory_and_move_approval,
+            write_file_approval,
             read_file,
-            LongRunningFunctionTool(append_to_file_approval),
+            append_to_file_approval,
             read_pdf,
             read_csv,
-            LongRunningFunctionTool(write_csv_approval),
+            write_csv_approval,
             search_files,
             file_exists,
             get_file_info,
-            LongRunningFunctionTool(copy_file_approval),
-            LongRunningFunctionTool(delete_file),
-            LongRunningFunctionTool(create_directory_approval),
+            copy_file_approval,
+            delete_file,
+            create_directory_approval,
             find_in_file,
             get_system_info,
             press_hotkey,
             navigate_to_url,
             launch_and_get_pid,
             get_popuphost_menu_window,
-            LongRunningFunctionTool(upload_file_approval),
-            LongRunningFunctionTool(request_human),
+            upload_file_approval,
+            request_human,
         ],
     )
 

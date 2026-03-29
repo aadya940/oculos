@@ -1,10 +1,7 @@
 """Minimal Agent interface: Agent(llm=..., task=...)."""
 
-import asyncio
 import time
-import uuid
 from collections.abc import Awaitable, Callable
-from collections.abc import Mapping
 from typing import Any, Optional
 
 from google.adk.runners import Runner
@@ -17,10 +14,6 @@ from .agents import (
     DESKTOP_EXECUTOR_AGENT_NAME,
 )
 from .daemon import OculOSManager
-from ._tools.hitl import APPROVAL_TOOLS
-
-# Payload-based pending tools: disk approvals + request_human (not in APPROVAL_TOOLS impl map).
-_PENDING_PAYLOAD_TOOLS = frozenset(APPROVAL_TOOLS.keys()) | {"request_human"}
 from ._ui import default_human_in_the_loop
 from .journal import Journal
 
@@ -34,121 +27,6 @@ def _console_safe(obj: Any) -> str:
     s = str(obj)
     return s.encode("ascii", errors="backslashreplace").decode("ascii")
 
-
-def _short(obj: Any, max_len: int = 800) -> str:
-    """Best-effort short repr for debug prints."""
-    try:
-        s = repr(obj)
-    except Exception:
-        s = str(obj)
-    if len(s) <= max_len:
-        return s
-    return s[: max_len - 20] + " ... (truncated)"
-
-
-def _get_long_running_calls(event: Any) -> list[tuple[Any, Any]]:
-    """
-    Get all (function_call, function_response) from the event for long-running tool calls.
-    Returns a list in order of appearance; each call id appears at most once.
-    """
-    if (
-        not getattr(event, "long_running_tool_ids", None)
-        or not getattr(event, "content", None)
-        or not event.content.parts
-    ):
-        return []
-    out: list[tuple[Any, Any]] = []
-    seen: set[str] = set()
-    for part in event.content.parts:
-        if not getattr(part, "function_call", None) or part.function_call.id not in (
-            event.long_running_tool_ids or ()
-        ):
-            continue
-        if part.function_call.id in seen:
-            continue
-        seen.add(part.function_call.id)
-        fr = _get_function_response(event, part.function_call.id)
-        out.append((part.function_call, fr))
-    return out
-
-
-def _get_function_response(event: Any, function_call_id: str) -> Optional[Any]:
-    """Get the function response for the function call with the given id."""
-    if not getattr(event, "content", None) or not event.content.parts:
-        return None
-    for part in event.content.parts:
-        if (
-            getattr(part, "function_response", None)
-            and getattr(part.function_response, "id", None) == function_call_id
-        ):
-            return part.function_response
-    return None
-
-
-def _maybe_enqueue_pending_response(
-    *,
-    pending: list[tuple[Any, Any]],
-    seen_ids: set[str],
-    function_response: Any,
-    debug: bool = False,
-) -> bool:
-    """
-    Some approval stubs return a normal function_response whose payload contains
-    {"status": "pending", "tool": "..."} instead of being surfaced by ADK as a
-    long-running tool call. Treat those as approval requests too.
-    """
-    if not function_response:
-        return False
-    resp = getattr(function_response, "response", None)
-    # NOTE: In practice, ADK/Gemini may surface a dict-like Mapping that prints as
-    # "{'status': 'pending', ...}" but is not a concrete "dict" instance.
-    if not isinstance(resp, Mapping):
-        if debug:
-            print(
-                _console_safe(
-                    "[HITL debug] function_response.response is not Mapping: "
-                    f"type={type(resp)} value={_short(resp)}"
-                )
-            )
-        return False
-    status = resp.get("status")
-    if status != "pending":
-        if debug and status is not None:
-            print(
-                _console_safe(
-                    "[HITL debug] response status not pending: "
-                    f"status={status!r} type={type(resp)} keys={list(resp.keys())[:12]}"
-                )
-            )
-        return False
-    tool = resp.get("tool")
-    if not isinstance(tool, str) or tool not in _PENDING_PAYLOAD_TOOLS:
-        if debug:
-            print(
-                _console_safe(
-                    "[HITL debug] pending response tool not approvable: "
-                    f"tool={tool!r} approvable={bool(isinstance(tool, str) and tool in APPROVAL_TOOLS)} "
-                    f"type={type(resp)} keys={list(resp.keys())[:12]}"
-                )
-            )
-        return False
-
-    # For payload-based pending approvals, do NOT reuse the long-running
-    # seen_ids guard. Long-running tracking may already have recorded this id,
-    # and we still want to surface the pending approval exactly once here.
-    call_id = getattr(function_response, "id", None) or f"manual-{uuid.uuid4()}"
-
-    args = {k: v for k, v in resp.items() if k not in ("status", "tool")}
-    fc = types.FunctionCall(name=tool, id=call_id, args=args)
-    pending.append((fc, function_response))
-    if debug:
-        print(
-            _console_safe(
-                "[HITL debug] enqueued pending approval: "
-                f"tool={tool!r} call_id={call_id} args_keys={list(args.keys())}"
-            )
-        )
-    return True
 
 
 class _LatencyTracker:
@@ -267,12 +145,8 @@ class Agent:
         # Your existing wrapper `llm` default is often a raw Gemini name, so we only
         # override desktop/planner models from `self.llm` when it looks LiteLLM-compatible
         # (contains a '/'); otherwise we let build_agents fall back to its defaults.
-        desktop_model = self.desktop_llm
-        planner_model = self.planner_llm
-        if desktop_model is None and "/" in (self.llm or ""):
-            desktop_model = self.llm
-        if planner_model is None and "/" in (self.llm or ""):
-            planner_model = self.llm
+        desktop_model = self.desktop_llm or self.llm
+        planner_model = self.planner_llm or self.llm
 
         build_kwargs: dict[str, str] = {}
         if desktop_model is not None:
@@ -298,181 +172,107 @@ class Agent:
         if latency:
             latency.start_run()
 
-        handler = self._human_in_the_loop or default_human_in_the_loop
         _last = time.time()
 
-        while True:
-            pending: list[tuple[Any, Any]] = []
-            seen_ids: set[str] = set()
-            pause_for_approval = False
-
-            async for event in events:
-                # When the desktop executor finishes, finalize the evidence slice.
-                if (
-                    event.is_final_response()
-                    and event.author == DESKTOP_EXECUTOR_AGENT_NAME
-                    and journal_active
-                    and getattr(event, "content", None)
-                    and getattr(event.content, "parts", None)
-                    and event.content.parts
-                    and getattr(event.content.parts[0], "text", None) is not None
-                ):
-                    journal.finalize_end_interactions()
-                    session.state["journal"] = journal.to_dict()
-                    journal_active = False
-
-                # Collect all long-running (fc, fr) in order, no duplicates
-                for fc, fr in _get_long_running_calls(event):
-                    if fc.id not in seen_ids:
-                        seen_ids.add(fc.id)
-                        pending.append((fc, fr))
-
-                # Process tool parts on every event, including final_response events.
-                # If we only handled parts when not is_final_response(), pending HITL
-                # responses attached to a final event were never seen and the toast never ran.
-                if getattr(event, "content", None) and event.content.parts:
-                    for part in event.content.parts:
-                        if getattr(part, "function_call", None):
-                            now = time.time()
-                            name = part.function_call.name
-                            args = (
-                                dict(part.function_call.args)
-                                if part.function_call.args
-                                else {}
-                            )
-
-                            # Journal collection: only during desktop executor.
-                            if (
-                                event.author == DESKTOP_EXECUTOR_AGENT_NAME
-                                and not journal_active
-                            ):
-                                desktop_attempt_idx += 1
-                                phase_instruction = session.state.get(
-                                    "journal_phase_instruction", ""
-                                )
-                                journal.reset(
-                                    core_key=f"desktop_attempt_{desktop_attempt_idx}",
-                                    phase_instruction=str(phase_instruction or ""),
-                                )
-                                session.state["journal"] = journal.to_dict()
-                                journal_active = True
-
-                            if event.author == DESKTOP_EXECUTOR_AGENT_NAME:
-                                journal.record_call(
-                                    call_id=getattr(part.function_call, "id", None),
-                                    tool_name=name,
-                                    tool_args=args,
-                                )
-                            if latency:
-                                step_sec = latency.on_function_call(name, args)
-                                if self.verbose:
-                                    print(
-                                        _console_safe(
-                                            f"[{step_sec:.3f}s LLM->tool] [Action]: {name}({args})"
-                                        )
-                                    )
-                            else:
-                                if self.verbose:
-                                    print(
-                                        _console_safe(
-                                            f"[{round(now - _last, 2)}s] [Action]: {name}({args})"
-                                        )
-                                    )
-                            _last = now
-                        elif getattr(part, "function_response", None):
-                            name = getattr(part.function_response, "name", "?")
-                            pause_for_approval = _maybe_enqueue_pending_response(
-                                pending=pending,
-                                seen_ids=seen_ids,
-                                function_response=part.function_response,
-                                debug=bool(self.verbose),
-                            )
-                            if pause_for_approval:
-                                break
-
-                            if event.author == DESKTOP_EXECUTOR_AGENT_NAME:
-                                journal.record_response(
-                                    call_id=getattr(part.function_response, "id", None),
-                                    tool_name=name,
-                                    response=getattr(
-                                        part.function_response, "response", None
-                                    ),
-                                )
-
-                            if latency:
-                                tool_sec = latency.on_function_response(name)
-                                if self.verbose:
-                                    print(
-                                        _console_safe(
-                                            f"[tool {tool_sec:.3f}s] [Result]: {part.function_response.response}"
-                                        )
-                                    )
-                            else:
-                                if self.verbose:
-                                    print(
-                                        _console_safe(
-                                            f"[Result]: {part.function_response.response}"
-                                        )
-                                    )
-                            _last = time.time()
-                    if pause_for_approval:
-                        break
-
-                if event.is_final_response():
-                    if latency:
-                        latency.on_final_response()
-                    if getattr(event, "content", None) and event.content.parts:
-                        first = event.content.parts[0]
-                        if getattr(first, "text", None) is not None:
-                            print(f"\n{_console_safe(first.text)}")
-                if pause_for_approval:
-                    break
-
-            if not pending:
-                break
-
-            # Process the first pending long-running call, then resume
-            long_running_call, long_running_response = pending[0]
-            name = long_running_call.name
-            args = dict(long_running_call.args) if long_running_call.args else {}
-            kind = "approval" if name in APPROVAL_TOOLS else "help"
-            context = {"tool": name, **args}
-
-            result = await handler(kind, context)
-
+        async for event in events:
+            # When the desktop executor finishes, finalize the evidence slice.
             if (
-                kind == "approval"
-                and result.get("status") == "approved"
-                and name in APPROVAL_TOOLS
+                event.is_final_response()
+                and event.author == DESKTOP_EXECUTOR_AGENT_NAME
+                and journal_active
+                and getattr(event, "content", None)
+                and getattr(event.content, "parts", None)
+                and event.content.parts
+                and getattr(event.content.parts[0], "text", None) is not None
             ):
-                try:
-                    impl = APPROVAL_TOOLS[name]
-                    if asyncio.iscoroutinefunction(impl):
-                        response_body = await impl(**args)
-                    else:
-                        response_body = impl(**args)
-                except Exception as e:
-                    response_body = {"status": "error", "message": str(e)}
-            else:
-                response_body = result
+                journal.finalize_end_interactions()
+                session.state["journal"] = journal.to_dict()
+                journal_active = False
 
-            if long_running_response is not None and hasattr(
-                long_running_response, "model_copy"
-            ):
-                updated_response = long_running_response.model_copy(deep=True)
-                updated_response.response = response_body
-            else:
-                updated_response = types.FunctionResponse(
-                    id=long_running_call.id, name=name, response=response_body
-                )
+            if event.is_final_response():
+                if latency:
+                    latency.on_final_response()
+                if getattr(event, "content", None) and event.content.parts:
+                    first = event.content.parts[0]
+                    if getattr(first, "text", None) is not None:
+                        print(f"\n{_console_safe(first.text)}")
+            elif getattr(event, "content", None) and event.content.parts:
+                for part in event.content.parts:
+                    if getattr(part, "function_call", None):
+                        now = time.time()
+                        name = part.function_call.name
+                        args = (
+                            dict(part.function_call.args)
+                            if part.function_call.args
+                            else {}
+                        )
 
-            resume_content = types.Content(
-                role="user",
-                parts=[types.Part(function_response=updated_response)],
-            )
-            events = runner.run_async(
-                session_id=session.id, user_id=user_id, new_message=resume_content
-            )
+                        # Journal collection: only during desktop executor.
+                        if (
+                            event.author == DESKTOP_EXECUTOR_AGENT_NAME
+                            and not journal_active
+                        ):
+                            desktop_attempt_idx += 1
+                            phase_instruction = session.state.get(
+                                "journal_phase_instruction", ""
+                            )
+                            journal.reset(
+                                core_key=f"desktop_attempt_{desktop_attempt_idx}",
+                                phase_instruction=str(phase_instruction or ""),
+                            )
+                            session.state["journal"] = journal.to_dict()
+                            journal_active = True
+
+                        if event.author == DESKTOP_EXECUTOR_AGENT_NAME:
+                            journal.record_call(
+                                call_id=getattr(part.function_call, "id", None),
+                                tool_name=name,
+                                tool_args=args,
+                            )
+                        if latency:
+                            step_sec = latency.on_function_call(name, args)
+                            if self.verbose:
+                                print(
+                                    _console_safe(
+                                        f"[{step_sec:.3f}s LLM->tool] [Action]: {name}({args})"
+                                    )
+                                )
+                        else:
+                            if self.verbose:
+                                print(
+                                    _console_safe(
+                                        f"[{round(now - _last, 2)}s] [Action]: {name}({args})"
+                                    )
+                                )
+                        _last = now
+                    elif getattr(part, "function_response", None):
+                        name = getattr(part.function_response, "name", "?")
+
+                        if event.author == DESKTOP_EXECUTOR_AGENT_NAME:
+                            journal.record_response(
+                                call_id=getattr(part.function_response, "id", None),
+                                tool_name=name,
+                                response=getattr(
+                                    part.function_response, "response", None
+                                ),
+                            )
+
+                        if latency:
+                            tool_sec = latency.on_function_response(name)
+                            if self.verbose:
+                                print(
+                                    _console_safe(
+                                        f"[tool {tool_sec:.3f}s] [Result]: {part.function_response.response}"
+                                    )
+                                )
+                        else:
+                            if self.verbose:
+                                print(
+                                    _console_safe(
+                                        f"[Result]: {part.function_response.response}"
+                                    )
+                                )
+                        _last = time.time()
 
         if latency and self.verbose:
             latency.print_report()
