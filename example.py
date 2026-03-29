@@ -16,6 +16,7 @@ async def main():
         Requirements:
         - Do not browse unnecessary jobs—pick the first relevant Easy Apply listing.
         - When you reach any “Resume” step, Upload the resume to the job.
+        - Make sure what you're applying to is an Internship.
         """
         ),
         verbose=True,

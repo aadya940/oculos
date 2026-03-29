@@ -11,9 +11,12 @@ from google.adk.models import Gemini, LiteLlm
 from google.genai.errors import ClientError
 from typing import Optional
 import json
+import logging
 import os
 import tempfile
 import traceback
+
+log = logging.getLogger("orbit.agents")
 
 from .prompts import SYSTEM_PROMPT, PARENT_SYSTEM_PROMPT
 from ._tools.ui import (
@@ -158,12 +161,12 @@ def _dump_llm_request(llm_request: LlmRequest, tag: str = "") -> str:
                 payload["full_config"] = str(cfg)
         with open(path, "w", encoding="utf-8", errors="replace") as f:
             json.dump(payload, f, indent=2, default=str)
-        print(f"[DIAG] Dumped LLM request #{_call_counter} ({tag}) -> {path}")
-        print(f"[DIAG]   model={payload['model']} contents={payload['num_contents']} "
-              f"sys_len={payload['sys_instruction_len']} tools={payload['num_tools']} "
-              f"config_keys={payload['config_keys']}")
+        log.debug("Dumped LLM request #%d (%s) -> %s", _call_counter, tag, path)
+        log.debug("  model=%s contents=%d sys_len=%d tools=%d",
+                  payload['model'], payload['num_contents'],
+                  payload['sys_instruction_len'], payload['num_tools'])
     except Exception as e:
-        print(f"[DIAG] Failed to dump request: {e}")
+        log.warning("Failed to dump LLM request: %s", e)
     return path
 
 
@@ -243,10 +246,9 @@ def _handle_model_error(
     """Handle 400 INVALID_ARGUMENT by dumping the full request for diagnosis."""
     is_400 = isinstance(error, ClientError) and getattr(error, "code", None) == 400
     path = _dump_llm_request(llm_request, tag="ERROR_400" if is_400 else "ERROR_other")
-    print(f"[ERROR-CB] Model error: {type(error).__name__}: {error}")
-    print(f"[ERROR-CB] Full request dumped to: {path}")
+    log.error("Model error: %s: %s", type(error).__name__, error)
+    log.error("Request dumped to: %s", path)
     if is_400:
-        # Dump the FULL serialized config to see exactly what Gemini rejects
         try:
             err_path = os.path.join(_DUMP_DIR, f"call_{_call_counter:04d}_FULL_CONFIG.json")
             full = {}
@@ -260,10 +262,9 @@ def _handle_model_error(
             full["model"] = getattr(llm_request, "model", None)
             with open(err_path, "w", encoding="utf-8", errors="replace") as f:
                 json.dump(full, f, indent=2, default=str)
-            print(f"[ERROR-CB] Full config+contents JSON: {err_path}")
+            log.error("Full config dumped to: %s", err_path)
         except Exception as dump_err:
-            print(f"[ERROR-CB] Failed to dump full config: {dump_err}")
-            traceback.print_exc()
+            log.error("Failed to dump full config: %s", dump_err, exc_info=True)
     # Re-raise — don't swallow the error, just log it
     return None
 

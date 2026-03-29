@@ -16,7 +16,7 @@ from .ui import oculos_client
 from .clipboard import clipboard_set
 from .hotkey import press_hotkey
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("orbit.tools.filesystem")
 
 
 def get_system_info() -> Dict[str, Any]:

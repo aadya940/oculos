@@ -1,5 +1,6 @@
 """Minimal Agent interface: Agent(llm=..., task=...)."""
 
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional
@@ -17,6 +18,8 @@ from .daemon import OculOSManager
 from ._ui import default_human_in_the_loop
 from .journal import Journal
 
+log = logging.getLogger("orbit")
+
 
 def _console_safe(obj: Any) -> str:
     """
@@ -26,6 +29,24 @@ def _console_safe(obj: Any) -> str:
     """
     s = str(obj)
     return s.encode("ascii", errors="backslashreplace").decode("ascii")
+
+
+def _setup_logging(*, verbose: bool = False) -> None:
+    """Configure the 'orbit' logger. Called once per Agent init."""
+    logger = logging.getLogger("orbit")
+    if logger.handlers:
+        return  # already configured
+    level = logging.DEBUG if verbose else logging.INFO
+    logger.setLevel(level)
+    handler = logging.StreamHandler()
+    handler.setLevel(level)
+    fmt = logging.Formatter(
+        "%(asctime)s  %(levelname)-5s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    handler.setFormatter(fmt)
+    logger.addHandler(handler)
+    logger.propagate = False
 
 
 
@@ -76,20 +97,15 @@ class _LatencyTracker:
             "per_tool_sec": [(n, round(t, 3)) for n, t in self.tool_latencies],
         }
 
-    def print_report(self):
+    def log_report(self):
         s = self.summary()
-        print("AGENT LATENCY REPORT")
-        print("--------------------------------")
-        print(f"  Total run:           {s['total_sec']:.3f}s")
-        print(
-            f"  LLM steps:           {s['llm_steps']} (total {s['llm_time_sec']:.3f}s)"
-        )
-        print(
-            f"  Tool calls:          {s['tool_calls']} (total {s['tool_time_sec']:.3f}s)"
-        )
+        lines = [
+            "Latency report",
+            f"  total={s['total_sec']:.3f}s  llm={s['llm_steps']} steps ({s['llm_time_sec']:.3f}s)  tools={s['tool_calls']} calls ({s['tool_time_sec']:.3f}s)",
+        ]
         for name, sec in s.get("per_tool_sec", []):
-            print(f"    {name}: {sec:.3f}s")
-        print("--------------------------------")
+            lines.append(f"    {name}: {sec:.3f}s")
+        log.info("\n".join(lines))
 
 
 HumanInTheLoopHandler = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -116,6 +132,9 @@ class Agent:
         self.verbose = verbose
         self._human_in_the_loop = human_in_the_loop
 
+        # Configure logging based on verbose flag
+        _setup_logging(verbose=verbose)
+
     async def run(self):
         daemon = OculOSManager(verbose=self.verbose)
         await daemon.start()
@@ -126,8 +145,7 @@ class Agent:
 
     async def _run(self):
         prompt = self.task
-        if self.verbose:
-            print(f"\n[User]: {prompt}\n--------------------------------")
+        log.info("Task: %s", _console_safe(prompt))
 
         session_service = InMemorySessionService()
         session = await session_service.create_session(
@@ -195,7 +213,7 @@ class Agent:
                 if getattr(event, "content", None) and event.content.parts:
                     first = event.content.parts[0]
                     if getattr(first, "text", None) is not None:
-                        print(f"\n{_console_safe(first.text)}")
+                        log.info("Agent: %s", _console_safe(first.text))
             elif getattr(event, "content", None) and event.content.parts:
                 for part in event.content.parts:
                     if getattr(part, "function_call", None):
@@ -231,19 +249,9 @@ class Agent:
                             )
                         if latency:
                             step_sec = latency.on_function_call(name, args)
-                            if self.verbose:
-                                print(
-                                    _console_safe(
-                                        f"[{step_sec:.3f}s LLM->tool] [Action]: {name}({args})"
-                                    )
-                                )
+                            log.debug("[%.3fs] %s(%s)", step_sec, name, _console_safe(args))
                         else:
-                            if self.verbose:
-                                print(
-                                    _console_safe(
-                                        f"[{round(now - _last, 2)}s] [Action]: {name}({args})"
-                                    )
-                                )
+                            log.debug("[%.2fs] %s(%s)", round(now - _last, 2), name, _console_safe(args))
                         _last = now
                     elif getattr(part, "function_response", None):
                         name = getattr(part.function_response, "name", "?")
@@ -259,21 +267,11 @@ class Agent:
 
                         if latency:
                             tool_sec = latency.on_function_response(name)
-                            if self.verbose:
-                                print(
-                                    _console_safe(
-                                        f"[tool {tool_sec:.3f}s] [Result]: {part.function_response.response}"
-                                    )
-                                )
+                            log.debug("[tool %.3fs] %s -> %s", tool_sec, name, _console_safe(part.function_response.response))
                         else:
-                            if self.verbose:
-                                print(
-                                    _console_safe(
-                                        f"[Result]: {part.function_response.response}"
-                                    )
-                                )
+                            log.debug("%s -> %s", name, _console_safe(part.function_response.response))
                         _last = time.time()
 
-        if latency and self.verbose:
-            latency.print_report()
+        if latency:
+            latency.log_report()
         return latency.summary() if latency else None
