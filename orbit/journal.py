@@ -86,9 +86,22 @@ class Journal:
 
         status = None
         message = None
+        captured_url: Optional[str] = None
         if isinstance(response, dict):
             status = response.get("status")
             message = response.get("message") or response.get("error")
+            if tool_name == "get_form_fields" and status == "success":
+                try:
+                    for tf in response.get("text_fields") or []:
+                        if not isinstance(tf, dict):
+                            continue
+                        if (tf.get("label") or "") == "Address and search bar":
+                            v = tf.get("value") or tf.get("text_content")
+                            if v is not None:
+                                captured_url = str(v)
+                            break
+                except Exception:
+                    captured_url = None
 
         action = {
             "tool": tool_name,
@@ -97,6 +110,7 @@ class Journal:
             "response_message": (
                 _truncate(message, 500) if message is not None else None
             ),
+            "captured_url": _truncate(captured_url, 300) if captured_url else None,
         }
         self.entry.actions.append(action)
 
