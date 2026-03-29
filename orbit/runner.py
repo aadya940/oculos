@@ -16,6 +16,7 @@ from .agents import (
 )
 from .daemon import OculOSManager
 from ._ui import default_human_in_the_loop
+from ._ui.console import OrbitConsole
 from .journal import Journal
 
 log = logging.getLogger("orbit")
@@ -145,7 +146,8 @@ class Agent:
 
     async def _run(self):
         prompt = self.task
-        log.info("Task: %s", _console_safe(prompt))
+        ui = OrbitConsole()
+        ui.task_start(prompt)
 
         session_service = InMemorySessionService()
         session = await session_service.create_session(
@@ -210,10 +212,14 @@ class Agent:
             if event.is_final_response():
                 if latency:
                     latency.on_final_response()
+                text = None
                 if getattr(event, "content", None) and event.content.parts:
                     first = event.content.parts[0]
-                    if getattr(first, "text", None) is not None:
-                        log.info("Agent: %s", _console_safe(first.text))
+                    text = getattr(first, "text", None)
+                if event.author == DESKTOP_EXECUTOR_AGENT_NAME:
+                    ui.step_done()
+                else:
+                    ui.agent_done(_console_safe(text) if text else "")
             elif getattr(event, "content", None) and event.content.parts:
                 for part in event.content.parts:
                     if getattr(part, "function_call", None):
@@ -240,6 +246,12 @@ class Agent:
                             )
                             session.state["journal"] = journal.to_dict()
                             journal_active = True
+
+                        # Rich UI: planner delegating a step vs desktop tool call
+                        if name == DESKTOP_EXECUTOR_AGENT_NAME:
+                            ui.step_start(args.get("request", str(args)))
+                        elif event.author == DESKTOP_EXECUTOR_AGENT_NAME:
+                            ui.step_tool(name)
 
                         if event.author == DESKTOP_EXECUTOR_AGENT_NAME:
                             journal.record_call(
@@ -273,5 +285,5 @@ class Agent:
                         _last = time.time()
 
         if latency:
-            latency.log_report()
+            ui.latency(latency.summary())
         return latency.summary() if latency else None
