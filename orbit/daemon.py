@@ -1,10 +1,13 @@
 import asyncio
+import logging
 import subprocess
 import time
 import requests
 import atexit
 import os
 from pathlib import Path
+
+log = logging.getLogger("orbit.daemon")
 
 
 class OculOSManager:
@@ -35,8 +38,7 @@ class OculOSManager:
         if not self.binary_path.exists():
             raise FileNotFoundError(f"OculOS binary not found at: {self.binary_path}")
 
-        if self.verbose:
-            print("Starting OculOS daemon...")
+        log.info("Starting OculOS daemon...")
 
         self.process = subprocess.Popen(
             [str(self.binary_path)],
@@ -55,8 +57,7 @@ class OculOSManager:
             try:
                 response = requests.get(f"{self.base_url}/health", timeout=1)
                 if response.status_code == 200:
-                    if self.verbose:
-                        print("OculOS daemon is live and listening on port 7878.")
+                    log.info("OculOS daemon ready on port 7878")
                     return
             except requests.exceptions.ConnectionError:
                 await asyncio.sleep(0)
@@ -67,9 +68,7 @@ class OculOSManager:
     def stop(self):
         """Terminates the background process."""
         if self.process and self.process.poll() is None:
-            if self.verbose:
-                print("Shutting down OculOS daemon...")
+            log.info("Stopping OculOS daemon...")
             self.process.terminate()
             self.process.wait(timeout=3)
-            if self.verbose:
-                print("Daemon stopped.")
+            log.info("Daemon stopped")
