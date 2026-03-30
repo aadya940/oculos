@@ -3,9 +3,10 @@
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, Literal, Optional
 
-from google.adk.runners import Runner
+from google.adk.runners import Runner, RunConfig
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from google.adk.artifacts import InMemoryArtifactService
@@ -20,6 +21,17 @@ from ._ui.console import OrbitConsole
 from .journal import Journal
 
 log = logging.getLogger("orbit")
+
+
+@dataclass
+class RunResult:
+    """Structured return type for Agent.run()."""
+
+    status: Literal["success", "failed", "needs_human", "error"]
+    summary: str = ""
+    errors: list[str] = field(default_factory=list)
+    latency: dict = field(default_factory=dict)
+    journal: dict = field(default_factory=dict)
 
 
 def _console_safe(obj: Any) -> str:
@@ -123,6 +135,7 @@ class Agent:
         planner_llm: Optional[str] = None,
         measure_latency: bool = True,
         verbose: bool = False,
+        max_steps: int = 30,
         human_in_the_loop: Optional[HumanInTheLoopHandler] = None,
     ):
         self.task = task
@@ -131,27 +144,37 @@ class Agent:
         self.planner_llm = planner_llm
         self.measure_latency = measure_latency
         self.verbose = verbose
+        self.max_steps = max_steps
         self._human_in_the_loop = human_in_the_loop
 
         # Configure logging based on verbose flag
         _setup_logging(verbose=verbose)
 
-    async def run(self):
+    async def run(self) -> RunResult:
         daemon = OculOSManager(verbose=self.verbose)
         await daemon.start()
         try:
             return await self._run()
+        except Exception as e:
+            log.error("Agent run failed: %s", e, exc_info=True)
+            return RunResult(status="error", summary=str(e), errors=[str(e)])
         finally:
             daemon.stop()
 
-    async def _run(self):
+    async def _run(self) -> RunResult:
         prompt = self.task
-        ui = OrbitConsole()
+        ui = OrbitConsole(verbose=self.verbose)
         ui.task_start(prompt)
+
+        # State tracked across the event loop for RunResult.
+        final_text = ""
+        errors: list[str] = []
+        saw_request_human = False
 
         session_service = InMemorySessionService()
         session = await session_service.create_session(
-            app_name="desktop_app", user_id="local_admin", session_id="session_001"
+            app_name="desktop_app", user_id="local_admin", session_id="session_001",
+            state={"_orbit_max_calls": self.max_steps},
         )
 
         # Ephemeral, attempt-scoped OS Action Journal for debugging/inspection.
@@ -184,8 +207,10 @@ class Agent:
         )
         user_id = "local_admin"
         content = types.Content(role="user", parts=[types.Part(text=prompt)])
+        run_config = RunConfig(max_llm_calls=self.max_steps)
         events = runner.run_async(
-            session_id=session.id, user_id=user_id, new_message=content
+            session_id=session.id, user_id=user_id, new_message=content,
+            run_config=run_config,
         )
 
         latency = _LatencyTracker() if self.measure_latency else None
@@ -219,7 +244,8 @@ class Agent:
                 if event.author == DESKTOP_EXECUTOR_AGENT_NAME:
                     ui.step_done()
                 else:
-                    ui.agent_done(_console_safe(text) if text else "")
+                    final_text = _console_safe(text) if text else ""
+                    ui.agent_done(final_text)
             elif getattr(event, "content", None) and event.content.parts:
                 for part in event.content.parts:
                     if getattr(part, "function_call", None):
@@ -246,6 +272,10 @@ class Agent:
                             )
                             session.state["journal"] = journal.to_dict()
                             journal_active = True
+
+                        # Track request_human calls for RunResult status.
+                        if name == "request_human":
+                            saw_request_human = True
 
                         # Rich UI: planner delegating a step vs desktop tool call
                         if name == DESKTOP_EXECUTOR_AGENT_NAME:
@@ -277,6 +307,11 @@ class Agent:
                                 ),
                             )
 
+                        # Collect tool errors for RunResult.
+                        resp = getattr(part.function_response, "response", None)
+                        if isinstance(resp, dict) and resp.get("status") == "error":
+                            errors.append(f"{name}: {resp.get('message', 'unknown error')}")
+
                         if latency:
                             tool_sec = latency.on_function_response(name)
                             log.debug("[tool %.3fs] %s -> %s", tool_sec, name, _console_safe(part.function_response.response))
@@ -284,6 +319,32 @@ class Agent:
                             log.debug("%s -> %s", name, _console_safe(part.function_response.response))
                         _last = time.time()
 
+        # Clean up any lingering spinner.
+        ui.step_done()
+
+        # Determine status.
+        if saw_request_human:
+            status = "needs_human"
+        elif errors:
+            status = "failed"
+        else:
+            status = "success"
+
+        latency_summary = latency.summary() if latency else {}
+        # Re-read session to get state updates from callbacks.
+        updated_session = await session_service.get_session(
+            app_name="desktop_app", user_id="local_admin", session_id=session.id,
+        )
+        llm_calls_used = (updated_session.state if updated_session else session.state).get("_orbit_call_count", 0)
+        latency_summary["llm_calls"] = llm_calls_used
+        latency_summary["max_llm_calls"] = self.max_steps
         if latency:
-            ui.latency(latency.summary())
-        return latency.summary() if latency else None
+            ui.latency(latency_summary)
+
+        return RunResult(
+            status=status,
+            summary=final_text,
+            errors=errors,
+            latency=latency_summary,
+            journal=journal.to_dict(),
+        )
