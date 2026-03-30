@@ -19,7 +19,11 @@ class Do(BaseActionAgent):
         self._task = task
 
     def task_prompt(self) -> str:
-        return self._task
+        return (
+            f"ACTION: {self._task}\n"
+            "Perform this action on the desktop. "
+            "Once the action is clearly completed, stop immediately."
+        )
 
 
 class Read(BaseActionAgent):
@@ -35,12 +39,24 @@ class Read(BaseActionAgent):
     """
 
     def __init__(self, task: str, *, schema: Optional[Type] = None, **kw):
+        kw.setdefault("max_steps", 10)
         super().__init__(**kw)
         self._task = task
         self._schema = schema
 
     def task_prompt(self) -> str:
-        return self._task
+        prompt = (
+            f"OBSERVE: {self._task}\n"
+            "Extract the requested information from the current screen state. "
+            "Do NOT perform any actions that change application state — "
+            "only read, observe, and report back. "
+            "Use read_pdf / read_file / read_csv for local files instead of opening them."
+        )
+        if self._schema is not None:
+            prompt += (
+                f"\nReturn the data matching this structure: {self._schema.__name__}."
+            )
+        return prompt
 
     def output_schema(self) -> Optional[Type]:
         return self._schema
@@ -64,7 +80,12 @@ class Check(BaseActionAgent):
         self._condition = condition
 
     def task_prompt(self) -> str:
-        return f"Check: {self._condition}. Respond ONLY 'true' or 'false'."
+        return (
+            f"VERIFY: {self._condition}\n"
+            "Check whether this condition is true on the current screen. "
+            "Do NOT perform any actions — only observe. "
+            "Respond with ONLY the word 'true' or 'false'."
+        )
 
     async def check(self) -> bool:
         """Convenience: returns Python bool directly."""
@@ -82,11 +103,17 @@ class Navigate(BaseActionAgent):
     """
 
     def __init__(self, target: str, **kw):
+        kw.setdefault("max_steps", 10)
         super().__init__(**kw)
         self._target = target
 
     def task_prompt(self) -> str:
-        return f"Navigate to: {self._target}"
+        return (
+            f"NAVIGATE: {self._target}\n"
+            "Open this URL in the browser or launch this application. "
+            "Wait until the target is loaded and ready, then stop immediately. "
+            "Do not interact with any content — just get there."
+        )
 
 
 class Fill(BaseActionAgent):
@@ -103,5 +130,10 @@ class Fill(BaseActionAgent):
         self._data = data
 
     def task_prompt(self) -> str:
-        fields = ", ".join(f"{k}: {v}" for k, v in self._data.items())
-        return f"Fill {self._target} with: {fields}"
+        fields = "\n".join(f"  • {k}: {v}" for k, v in self._data.items())
+        return (
+            f"FILL: {self._target}\n"
+            f"Enter these values into the form fields:\n{fields}\n"
+            "Use fill_form_fields where possible for efficiency. "
+            "Do NOT submit the form — only fill the fields."
+        )
