@@ -1,0 +1,86 @@
+"""BaseActionAgent — the extensibility primitive for Orbit verbs and domain agents."""
+
+import logging
+from abc import ABC, abstractmethod
+from typing import Any, Optional, Type
+
+from .runner import Agent, RunResult
+
+log = logging.getLogger("orbit.action")
+
+
+class BaseActionAgent(ABC):
+    """Abstract base for all Orbit verbs and user-defined domain agents.
+
+    Composes :class:`Agent` internally — does **not** inherit from it.
+    Subclasses must override :meth:`task_prompt`. Optionally override
+    :meth:`output_schema` to get typed output via ADK's ``output_schema``.
+
+    Usage::
+
+        class ReadResume(BaseActionAgent):
+            def __init__(self, path: str, **kw):
+                super().__init__(**kw)
+                self.path = path
+
+            def task_prompt(self) -> str:
+                return f"Read the resume at {self.path}"
+
+            def output_schema(self):
+                return ResumeData  # Pydantic model
+    """
+
+    def __init__(
+        self,
+        *,
+        session: Optional[Any] = None,
+        llm: str = "gemini-3-pro-preview",
+        max_steps: int = 30,
+        verbose: bool = False,
+        extra_tools: Optional[list] = None,
+        **kwargs,
+    ):
+        self._session = session
+        self._owns_session = session is None
+        self._llm = llm
+        self._max_steps = max_steps
+        self._verbose = verbose
+        self._extra_tools = extra_tools or []
+        self._kwargs = kwargs
+
+    @abstractmethod
+    def task_prompt(self) -> str:
+        """Return the natural language task string for the agent."""
+        ...
+
+    def output_schema(self) -> Optional[Type]:
+        """Override to return a Pydantic model for ADK ``output_schema``."""
+        return None
+
+    async def run(self) -> RunResult:
+        """Build an internal Agent, execute the task, and return the result."""
+        agent = Agent(
+            task=self.task_prompt(),
+            llm=self._llm,
+            max_steps=self._max_steps,
+            verbose=self._verbose,
+            session=self._session,
+            output_schema=self.output_schema(),
+            extra_tools=self._extra_tools,
+            **self._kwargs,
+        )
+        return await agent.run()
+
+    async def __aenter__(self):
+        if self._owns_session:
+            from .session import Session
+
+            self._session = Session()
+            await self._session.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc):
+        if self._owns_session and self._session:
+            await self._session.__aexit__(*exc)
+            self._session = None
+            self._owns_session = False

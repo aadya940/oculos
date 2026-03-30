@@ -29,17 +29,14 @@ class RunResult:
 
     status: Literal["success", "failed", "needs_human", "error"]
     summary: str = ""
+    output: Any = None
     errors: list[str] = field(default_factory=list)
     latency: dict = field(default_factory=dict)
     journal: dict = field(default_factory=dict)
 
 
 def _console_safe(obj: Any) -> str:
-    """
-    Return an ASCII-only string for console logging.
-    This prevents Windows terminals (cp1252) from crashing on unexpected unicode
-    such as U+FFFC from accessibility text.
-    """
+    """Return an ASCII-only string for console logging."""
     s = str(obj)
     return s.encode("ascii", errors="backslashreplace").decode("ascii")
 
@@ -48,7 +45,7 @@ def _setup_logging(*, verbose: bool = False) -> None:
     """Configure the 'orbit' logger. Called once per Agent init."""
     logger = logging.getLogger("orbit")
     if logger.handlers:
-        return  # already configured
+        return
     level = logging.DEBUG if verbose else logging.INFO
     logger.setLevel(level)
     handler = logging.StreamHandler()
@@ -125,6 +122,9 @@ class Agent:
         measure_latency: bool = True,
         verbose: bool = False,
         max_steps: int = 30,
+        session: Optional[Any] = None,
+        output_schema: Optional[Any] = None,
+        extra_tools: Optional[list] = None,
         human_in_the_loop: Optional[HumanInTheLoopHandler] = None,
     ):
         self.task = task
@@ -134,59 +134,101 @@ class Agent:
         self.measure_latency = measure_latency
         self.verbose = verbose
         self.max_steps = max_steps
+        self._session = session
+        self._output_schema = output_schema
+        self._extra_tools = extra_tools or []
         self._human_in_the_loop = human_in_the_loop
+        self._owns_session = False
 
-        # Configure logging based on verbose flag
         _setup_logging(verbose=verbose)
 
+    # ── Lifecycle ─────────────────────────────────────────────────
+
     async def run(self) -> RunResult:
-        daemon = OculOSManager()
-        await daemon.start()
-        try:
-            return await self._run()
-        except Exception as e:
-            log.error("Agent run failed: %s", e, exc_info=True)
-            return RunResult(status="error", summary=str(e), errors=[str(e)])
-        finally:
-            daemon.stop()
+        if self._session and self._session.started:
+            try:
+                return await self._run()
+            except Exception as e:
+                log.error("Agent run failed: %s", e, exc_info=True)
+                return RunResult(status="error", summary=str(e), errors=[str(e)])
+        else:
+            # Ephemeral session — backward compatible path.
+            from .session import Session
+
+            async with Session() as s:
+                self._session = s
+                try:
+                    return await self._run()
+                except Exception as e:
+                    log.error("Agent run failed: %s", e, exc_info=True)
+                    return RunResult(status="error", summary=str(e), errors=[str(e)])
+
+    async def __aenter__(self):
+        if not self._session:
+            from .session import Session
+
+            self._session = Session()
+            await self._session.__aenter__()
+            self._owns_session = True
+        return self
+
+    async def __aexit__(self, *exc):
+        if self._owns_session and self._session:
+            await self._session.__aexit__(*exc)
+            self._session = None
+            self._owns_session = False
+
+    # ── Core orchestration ────────────────────────────────────────
 
     async def _run(self) -> RunResult:
         prompt = self.task
-        ui = OrbitConsole(verbose=self.verbose)
-        ui.task_start(prompt)
+        self._ui = OrbitConsole(verbose=self.verbose)
+        self._ui.task_start(prompt)
 
-        # State tracked across the event loop for RunResult.
-        final_text = ""
-        errors: list[str] = []
-        saw_request_human = False
+        # Run state.
+        self._final_text = ""
+        self._errors: list[str] = []
+        self._saw_request_human = False
 
-        session_service = InMemorySessionService()
-        session = await session_service.create_session(
-            app_name="desktop_app",
-            user_id="local_admin",
-            session_id="session_001",
-            state={"_orbit_max_calls": self.max_steps},
-        )
+        # Reuse ADK session from orbit Session if available (shared state across verbs).
+        if self._session and hasattr(self._session, "session_service"):
+            session_service = self._session.session_service
+            if self._session.adk_session is not None:
+                session = self._session.adk_session
+                # Reset budget for this verb's run.
+                session.state["_orbit_max_calls"] = self.max_steps
+                session.state["_orbit_call_count"] = 0
+            else:
+                session = await session_service.create_session(
+                    app_name="desktop_app",
+                    user_id="local_admin",
+                    session_id="session_001",
+                    state={"_orbit_max_calls": self.max_steps},
+                )
+                self._session.adk_session = session
+        else:
+            session_service = InMemorySessionService()
+            session = await session_service.create_session(
+                app_name="desktop_app",
+                user_id="local_admin",
+                session_id="session_001",
+                state={"_orbit_max_calls": self.max_steps},
+            )
 
-        # Ephemeral, attempt-scoped OS Action Journal for debugging/inspection.
-        journal = Journal(core_key="desktop_attempt_0")
-        desktop_attempt_idx = 0
-        journal_active = False
+        self._journal = Journal(core_key="desktop_attempt_0")
+        self._desktop_attempt_idx = 0
+        self._journal_active = False
+        self._session_obj = session
 
-        # Allow callers to provide separate model strings for planner vs desktop.
-        # If not provided, use `llm` for both for backwards compatibility.
-        # LiteLLM model strings are typically provider-prefixed (`provider/model-name`).
-        # Your existing wrapper `llm` default is often a raw Gemini name, so we only
-        # override desktop/planner models from `self.llm` when it looks LiteLLM-compatible
-        # (contains a '/'); otherwise we let build_agents fall back to its defaults.
         desktop_model = self.desktop_llm or self.llm
         planner_model = self.planner_llm or self.llm
-
-        build_kwargs: dict[str, str] = {}
+        build_kwargs: dict[str, Any] = {}
         if desktop_model is not None:
             build_kwargs["desktop_model"] = desktop_model
         if planner_model is not None:
             build_kwargs["planner_model"] = planner_model
+        if self._extra_tools:
+            build_kwargs["extra_tools"] = self._extra_tools
 
         parent_agent, _desktop_agent = build_agents(**build_kwargs)
 
@@ -203,151 +245,32 @@ class Agent:
             session_service=session_service,
             artifact_service=InMemoryArtifactService(),
         )
-        user_id = "local_admin"
         content = types.Content(role="user", parts=[types.Part(text=prompt)])
         events = runner.run_async(
             session_id=session.id,
-            user_id=user_id,
+            user_id="local_admin",
             new_message=content,
         )
 
-        latency = _LatencyTracker() if self.measure_latency else None
-        if latency:
-            latency.start_run()
-
-        _last = time.time()
+        self._latency = _LatencyTracker() if self.measure_latency else None
+        if self._latency:
+            self._latency.start_run()
+        self._last_time = time.time()
 
         async for event in events:
-            # When the desktop executor finishes, finalize the evidence slice.
-            if (
-                event.is_final_response()
-                and event.author == DESKTOP_EXECUTOR_AGENT_NAME
-                and journal_active
-                and getattr(event, "content", None)
-                and getattr(event.content, "parts", None)
-                and event.content.parts
-                and getattr(event.content.parts[0], "text", None) is not None
-            ):
-                journal.finalize_end_interactions()
-                session.state["journal"] = journal.to_dict()
-                journal_active = False
+            self._dispatch_event(event)
 
-            if event.is_final_response():
-                if latency:
-                    latency.on_final_response()
-                text = None
-                if getattr(event, "content", None) and event.content.parts:
-                    first = event.content.parts[0]
-                    text = getattr(first, "text", None)
-                if event.author == DESKTOP_EXECUTOR_AGENT_NAME:
-                    ui.step_done()
-                else:
-                    final_text = _console_safe(text) if text else ""
-                    ui.agent_done(final_text)
-            elif getattr(event, "content", None) and event.content.parts:
-                for part in event.content.parts:
-                    if getattr(part, "function_call", None):
-                        now = time.time()
-                        name = part.function_call.name
-                        args = (
-                            dict(part.function_call.args)
-                            if part.function_call.args
-                            else {}
-                        )
-
-                        # Journal collection: only during desktop executor.
-                        if (
-                            event.author == DESKTOP_EXECUTOR_AGENT_NAME
-                            and not journal_active
-                        ):
-                            desktop_attempt_idx += 1
-                            phase_instruction = session.state.get(
-                                "journal_phase_instruction", ""
-                            )
-                            journal.reset(
-                                core_key=f"desktop_attempt_{desktop_attempt_idx}",
-                                phase_instruction=str(phase_instruction or ""),
-                            )
-                            session.state["journal"] = journal.to_dict()
-                            journal_active = True
-
-                        # Track request_human calls for RunResult status.
-                        if name == "request_human":
-                            saw_request_human = True
-
-                        # Rich UI: planner delegating a step vs desktop tool call
-                        if name == DESKTOP_EXECUTOR_AGENT_NAME:
-                            ui.step_start(args.get("request", str(args)))
-                        elif event.author == DESKTOP_EXECUTOR_AGENT_NAME:
-                            ui.step_tool(name)
-
-                        if event.author == DESKTOP_EXECUTOR_AGENT_NAME:
-                            journal.record_call(
-                                call_id=getattr(part.function_call, "id", None),
-                                tool_name=name,
-                                tool_args=args,
-                            )
-                        if latency:
-                            step_sec = latency.on_function_call(name, args)
-                            log.debug(
-                                "[%.3fs] %s(%s)", step_sec, name, _console_safe(args)
-                            )
-                        else:
-                            log.debug(
-                                "[%.2fs] %s(%s)",
-                                round(now - _last, 2),
-                                name,
-                                _console_safe(args),
-                            )
-                        _last = now
-                    elif getattr(part, "function_response", None):
-                        name = getattr(part.function_response, "name", "?")
-
-                        if event.author == DESKTOP_EXECUTOR_AGENT_NAME:
-                            journal.record_response(
-                                call_id=getattr(part.function_response, "id", None),
-                                tool_name=name,
-                                response=getattr(
-                                    part.function_response, "response", None
-                                ),
-                            )
-
-                        # Collect tool errors for RunResult.
-                        resp = getattr(part.function_response, "response", None)
-                        if isinstance(resp, dict) and resp.get("status") == "error":
-                            errors.append(
-                                f"{name}: {resp.get('message', 'unknown error')}"
-                            )
-
-                        if latency:
-                            tool_sec = latency.on_function_response(name)
-                            log.debug(
-                                "[tool %.3fs] %s -> %s",
-                                tool_sec,
-                                name,
-                                _console_safe(part.function_response.response),
-                            )
-                        else:
-                            log.debug(
-                                "%s -> %s",
-                                name,
-                                _console_safe(part.function_response.response),
-                            )
-                        _last = time.time()
-
-        # Clean up any lingering spinner.
-        ui.step_done()
+        self._ui.step_done()
 
         # Determine status.
-        if saw_request_human:
+        if self._saw_request_human:
             status = "needs_human"
-        elif errors:
+        elif self._errors:
             status = "failed"
         else:
             status = "success"
 
-        latency_summary = latency.summary() if latency else {}
-        # Re-read session to get state updates from callbacks.
+        latency_summary = self._latency.summary() if self._latency else {}
         updated_session = await session_service.get_session(
             app_name="desktop_app",
             user_id="local_admin",
@@ -358,13 +281,140 @@ class Agent:
         ).get("_orbit_call_count", 0)
         latency_summary["llm_calls"] = llm_calls_used
         latency_summary["max_llm_calls"] = self.max_steps
-        if latency:
-            ui.latency(latency_summary)
+        if self._latency:
+            self._ui.latency(latency_summary)
 
         return RunResult(
             status=status,
-            summary=final_text,
-            errors=errors,
+            summary=self._final_text,
+            output=self._final_text,
+            errors=self._errors,
             latency=latency_summary,
-            journal=journal.to_dict(),
+            journal=self._journal.to_dict(),
         )
+
+    # ── Event dispatch ────────────────────────────────────────────
+
+    def _dispatch_event(self, event) -> None:
+        if event.is_final_response():
+            self._on_final_response(event)
+        elif getattr(event, "content", None) and event.content.parts:
+            for part in event.content.parts:
+                if getattr(part, "function_call", None):
+                    self._on_function_call(event, part)
+                elif getattr(part, "function_response", None):
+                    self._on_function_response(event, part)
+
+    def _on_final_response(self, event) -> None:
+        is_desktop = event.author == DESKTOP_EXECUTOR_AGENT_NAME
+
+        # Finalize journal when desktop executor finishes.
+        if (
+            is_desktop
+            and self._journal_active
+            and getattr(event, "content", None)
+            and getattr(event.content, "parts", None)
+            and event.content.parts
+            and getattr(event.content.parts[0], "text", None) is not None
+        ):
+            self._journal.finalize_end_interactions()
+            self._session_obj.state["journal"] = self._journal.to_dict()
+            self._journal_active = False
+
+        if self._latency:
+            self._latency.on_final_response()
+
+        text = None
+        if getattr(event, "content", None) and event.content.parts:
+            text = getattr(event.content.parts[0], "text", None)
+
+        if is_desktop:
+            self._ui.step_done()
+        else:
+            self._final_text = _console_safe(text) if text else ""
+            self._ui.agent_done(self._final_text)
+
+    def _on_function_call(self, event, part) -> None:
+        name = part.function_call.name
+        args = dict(part.function_call.args) if part.function_call.args else {}
+        is_desktop = event.author == DESKTOP_EXECUTOR_AGENT_NAME
+
+        # Start journal for new desktop phase.
+        if is_desktop and not self._journal_active:
+            self._desktop_attempt_idx += 1
+            phase_instruction = self._session_obj.state.get(
+                "journal_phase_instruction", ""
+            )
+            self._journal.reset(
+                core_key=f"desktop_attempt_{self._desktop_attempt_idx}",
+                phase_instruction=str(phase_instruction or ""),
+            )
+            self._session_obj.state["journal"] = self._journal.to_dict()
+            self._journal_active = True
+
+        if name == "request_human":
+            self._saw_request_human = True
+
+        # UI updates.
+        if name == DESKTOP_EXECUTOR_AGENT_NAME:
+            self._ui.step_start(args.get("request", str(args)))
+        elif is_desktop:
+            self._ui.step_tool(name)
+
+        # Journal.
+        if is_desktop:
+            self._journal.record_call(
+                call_id=getattr(part.function_call, "id", None),
+                tool_name=name,
+                tool_args=args,
+            )
+
+        # Latency / logging.
+        if self._latency:
+            step_sec = self._latency.on_function_call(name, args)
+            log.debug("[%.3fs] %s(%s)", step_sec, name, _console_safe(args))
+        else:
+            now = time.time()
+            log.debug(
+                "[%.2fs] %s(%s)",
+                round(now - self._last_time, 2),
+                name,
+                _console_safe(args),
+            )
+            self._last_time = now
+
+    def _on_function_response(self, event, part) -> None:
+        name = getattr(part.function_response, "name", "?")
+        is_desktop = event.author == DESKTOP_EXECUTOR_AGENT_NAME
+
+        # Journal.
+        if is_desktop:
+            self._journal.record_response(
+                call_id=getattr(part.function_response, "id", None),
+                tool_name=name,
+                response=getattr(part.function_response, "response", None),
+            )
+
+        # Collect errors.
+        resp = getattr(part.function_response, "response", None)
+        if isinstance(resp, dict) and resp.get("status") == "error":
+            self._errors.append(
+                f"{name}: {resp.get('message', 'unknown error')}"
+            )
+
+        # Latency / logging.
+        if self._latency:
+            tool_sec = self._latency.on_function_response(name)
+            log.debug(
+                "[tool %.3fs] %s -> %s",
+                tool_sec,
+                name,
+                _console_safe(part.function_response.response),
+            )
+        else:
+            log.debug(
+                "%s -> %s",
+                name,
+                _console_safe(part.function_response.response),
+            )
+            self._last_time = time.time()
