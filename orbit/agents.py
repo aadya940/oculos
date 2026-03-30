@@ -14,7 +14,6 @@ import json
 import logging
 import os
 import tempfile
-import traceback
 
 log = logging.getLogger("orbit.agents")
 
@@ -33,7 +32,6 @@ from ._tools.ui import (
     type_into,
     navigate_to_url,
     launch_and_get_pid,
-    take_screenshot,
     scroll_page,
     get_form_fields,
     select_dropdown_option,
@@ -213,10 +211,10 @@ _BUDGET_WARNING_THRESHOLD = 5  # Warn when this many calls remain.
 
 async def inject_screenshot_callback(
     callback_context: CallbackContext, llm_request: LlmRequest
-) -> None:
+) -> Optional[LlmResponse]:
     """
     Before each desktop agent LLM call:
-    1. Track call count and inject a budget warning when running low.
+    1. Track call count; hard-stop when budget exhausted, warn when running low.
     2. Inject screenshot artifacts as inline images.
     """
     _dump_llm_request(llm_request, tag="desktop_before_model")
@@ -226,6 +224,22 @@ async def inject_screenshot_callback(
     callback_context.state["_orbit_call_count"] = call_num
     max_calls = callback_context.state.get("_orbit_max_calls", 30)
     remaining = max(0, max_calls - call_num)
+
+    # Hard-stop: return a canned response so the LLM is never called.
+    if remaining <= 0:
+        log.warning(
+            "Budget exhausted (%d/%d calls). Forcing stop.", call_num, max_calls
+        )
+        return LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        text="[BUDGET EXHAUSTED] Stopping — no LLM calls remaining."
+                    )
+                ],
+            )
+        )
 
     if remaining <= _BUDGET_WARNING_THRESHOLD and llm_request.contents:
         llm_request.contents.append(
@@ -412,6 +426,3 @@ def build_agents(
     desktop_agent = build_desktop_agent(desktop_model)
     parent_agent = build_parent_agent(planner_model, desktop_agent)
     return parent_agent, desktop_agent
-
-
-parent_agent, desktop_agent = build_agents()

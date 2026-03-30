@@ -33,7 +33,7 @@ as hello.txt, then close Notepad.
 async def main():
     result: RunResult = await Agent(
         task=TASK,
-        llm="gemini-3.1-pro-preview-customtools",
+        llm="gemini-2.5-pro",
         max_steps=15,
         verbose=True,
     ).run()

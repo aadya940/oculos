@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 from google.adk.apps.app import App, EventsCompactionConfig
-from google.adk.runners import Runner, RunConfig
+from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from google.adk.artifacts import InMemoryArtifactService
@@ -17,7 +17,6 @@ from .agents import (
     DESKTOP_EXECUTOR_AGENT_NAME,
 )
 from .daemon import OculOSManager
-from ._ui import default_human_in_the_loop
 from ._ui.console import OrbitConsole
 from .journal import Journal
 
@@ -110,16 +109,6 @@ class _LatencyTracker:
             "per_tool_sec": [(n, round(t, 3)) for n, t in self.tool_latencies],
         }
 
-    def log_report(self):
-        s = self.summary()
-        lines = [
-            "Latency report",
-            f"  total={s['total_sec']:.3f}s  llm={s['llm_steps']} steps ({s['llm_time_sec']:.3f}s)  tools={s['tool_calls']} calls ({s['tool_time_sec']:.3f}s)",
-        ]
-        for name, sec in s.get("per_tool_sec", []):
-            lines.append(f"    {name}: {sec:.3f}s")
-        log.info("\n".join(lines))
-
 
 HumanInTheLoopHandler = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -151,7 +140,7 @@ class Agent:
         _setup_logging(verbose=verbose)
 
     async def run(self) -> RunResult:
-        daemon = OculOSManager(verbose=self.verbose)
+        daemon = OculOSManager()
         await daemon.start()
         try:
             return await self._run()
@@ -216,12 +205,10 @@ class Agent:
         )
         user_id = "local_admin"
         content = types.Content(role="user", parts=[types.Part(text=prompt)])
-        run_config = RunConfig(max_llm_calls=self.max_steps)
         events = runner.run_async(
             session_id=session.id,
             user_id=user_id,
             new_message=content,
-            run_config=run_config,
         )
 
         latency = _LatencyTracker() if self.measure_latency else None

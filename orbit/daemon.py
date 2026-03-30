@@ -29,7 +29,6 @@ class OculOSManager:
         self.binary_path = Path(binary_path).resolve()
         self.process = None
         self.base_url = "http://127.0.0.1:7878"
-        self.verbose = verbose
 
         atexit.register(self.stop)
 
