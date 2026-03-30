@@ -127,18 +127,38 @@ def _dump_llm_request(llm_request: LlmRequest, tag: str = "") -> str:
         if llm_request.contents:
             for i, c in enumerate(llm_request.contents):
                 parts_info = []
-                for p in (c.parts or []):
+                for p in c.parts or []:
                     if getattr(p, "text", None) is not None:
-                        parts_info.append({"type": "text", "len": len(p.text), "preview": p.text[:200]})
+                        parts_info.append(
+                            {
+                                "type": "text",
+                                "len": len(p.text),
+                                "preview": p.text[:200],
+                            }
+                        )
                     elif getattr(p, "function_call", None):
-                        parts_info.append({"type": "function_call", "name": p.function_call.name})
+                        parts_info.append(
+                            {"type": "function_call", "name": p.function_call.name}
+                        )
                     elif getattr(p, "function_response", None):
-                        parts_info.append({"type": "function_response", "name": p.function_response.name})
+                        parts_info.append(
+                            {
+                                "type": "function_response",
+                                "name": p.function_response.name,
+                            }
+                        )
                     elif getattr(p, "inline_data", None):
-                        parts_info.append({"type": "inline_data", "mime": getattr(p.inline_data, "mime_type", "?")})
+                        parts_info.append(
+                            {
+                                "type": "inline_data",
+                                "mime": getattr(p.inline_data, "mime_type", "?"),
+                            }
+                        )
                     else:
                         parts_info.append({"type": "other"})
-                payload["contents_summary"].append({"index": i, "role": c.role, "parts": parts_info})
+                payload["contents_summary"].append(
+                    {"index": i, "role": c.role, "parts": parts_info}
+                )
         if llm_request.config:
             cfg = llm_request.config
             if cfg.system_instruction:
@@ -146,25 +166,43 @@ def _dump_llm_request(llm_request: LlmRequest, tag: str = "") -> str:
                 if isinstance(si, str):
                     payload["sys_instruction_len"] = len(si)
                 elif hasattr(si, "parts") and si.parts:
-                    payload["sys_instruction_len"] = sum(len(getattr(p, "text", "") or "") for p in si.parts)
+                    payload["sys_instruction_len"] = sum(
+                        len(getattr(p, "text", "") or "") for p in si.parts
+                    )
             if cfg.tools:
                 total_decls = 0
                 for t in cfg.tools:
                     if hasattr(t, "function_declarations") and t.function_declarations:
                         total_decls += len(t.function_declarations)
                 payload["num_tools"] = total_decls
-            payload["config_keys"] = [k for k, v in (cfg.model_dump(exclude_none=True) if hasattr(cfg, "model_dump") else {}).items() if v is not None]
+            payload["config_keys"] = [
+                k
+                for k, v in (
+                    cfg.model_dump(exclude_none=True)
+                    if hasattr(cfg, "model_dump")
+                    else {}
+                ).items()
+                if v is not None
+            ]
             # Dump the FULL config as JSON for diagnosis
             try:
-                payload["full_config"] = cfg.model_dump(exclude_none=True) if hasattr(cfg, "model_dump") else str(cfg)
+                payload["full_config"] = (
+                    cfg.model_dump(exclude_none=True)
+                    if hasattr(cfg, "model_dump")
+                    else str(cfg)
+                )
             except Exception:
                 payload["full_config"] = str(cfg)
         with open(path, "w", encoding="utf-8", errors="replace") as f:
             json.dump(payload, f, indent=2, default=str)
         log.debug("Dumped LLM request #%d (%s) -> %s", _call_counter, tag, path)
-        log.debug("  model=%s contents=%d sys_len=%d tools=%d",
-                  payload['model'], payload['num_contents'],
-                  payload['sys_instruction_len'], payload['num_tools'])
+        log.debug(
+            "  model=%s contents=%d sys_len=%d tools=%d",
+            payload["model"],
+            payload["num_contents"],
+            payload["sys_instruction_len"],
+            payload["num_tools"],
+        )
     except Exception as e:
         log.warning("Failed to dump LLM request: %s", e)
     return path
@@ -193,10 +231,12 @@ async def inject_screenshot_callback(
         llm_request.contents.append(
             types.Content(
                 role="user",
-                parts=[types.Part(
-                    text=f"[BUDGET] {remaining} LLM calls remaining. "
-                         "Finish the current step now and return."
-                )],
+                parts=[
+                    types.Part(
+                        text=f"[BUDGET] {remaining} LLM calls remaining. "
+                        "Finish the current step now and return."
+                    )
+                ],
             )
         )
 
@@ -225,9 +265,7 @@ async def inject_screenshot_callback(
                                         data=artifact.inline_data.data,
                                     )
                                 ),
-                                types.Part(
-                                    text="This is the current screenshot."
-                                ),
+                                types.Part(text="This is the current screenshot."),
                             ],
                         )
                     )
@@ -247,7 +285,6 @@ def capture_phase_instruction_before_agent_callback(
 
 
 _planner = BuiltInPlanner(thinking_config=types.ThinkingConfig(thinking_budget=512))
-
 
 
 def system_prompt_provider(context: ReadonlyContext) -> str:
@@ -270,7 +307,9 @@ def _handle_model_error(
     log.error("Request dumped to: %s", path)
     if is_400:
         try:
-            err_path = os.path.join(_DUMP_DIR, f"call_{_call_counter:04d}_FULL_CONFIG.json")
+            err_path = os.path.join(
+                _DUMP_DIR, f"call_{_call_counter:04d}_FULL_CONFIG.json"
+            )
             full = {}
             if llm_request.config and hasattr(llm_request.config, "model_dump"):
                 full["config"] = llm_request.config.model_dump(mode="json")

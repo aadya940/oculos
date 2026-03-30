@@ -13,7 +13,7 @@ log = logging.getLogger("orbit.daemon")
 class OculOSManager:
     def __init__(
         self,
-        binary_path: str = os.environ.get("OCULOS_BINARY_PATH"),
+        binary_path: str = r"C:\Users\aadya\Desktop\oculos\target\release\oculos.exe",
         verbose: bool = False,
     ):
         """Manages the lifecycle of the OculOS background daemon."""
