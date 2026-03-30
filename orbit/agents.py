@@ -8,7 +8,7 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.models import Gemini, LiteLlm
-from typing import Optional
+from typing import Any, Optional
 import logging
 
 log = logging.getLogger("orbit.agents")
@@ -198,7 +198,9 @@ def parent_prompt_provider(context: ReadonlyContext) -> str:
     return PARENT_SYSTEM_PROMPT
 
 
-def build_desktop_agent(desktop_model: str, extra_tools: Optional[list] = None) -> Agent:
+def build_desktop_agent(
+    desktop_model: str, extra_tools: Optional[list] = None
+) -> Agent:
     return Agent(
         model=make_lite_llm(desktop_model),
         name=DESKTOP_EXECUTOR_AGENT_NAME,
@@ -252,16 +254,18 @@ def build_desktop_agent(desktop_model: str, extra_tools: Optional[list] = None) 
             get_popuphost_menu_window,
             upload_file_approval,
             request_human,
-        ] + (extra_tools or []),
+        ]
+        + (extra_tools or []),
     )
 
 
 def build_parent_agent(
     planner_model: str,
     desktop_agent: Agent,
+    output_schema: Optional[type] = None,
 ) -> Agent:
     desktop_tool = AgentTool(desktop_agent)
-    return Agent(
+    kwargs: dict[str, Any] = dict(
         model=make_lite_llm(planner_model),
         name="planner",
         planner=_planner,
@@ -270,6 +274,9 @@ def build_parent_agent(
         instruction=parent_prompt_provider,
         tools=[duckduckgo_search, desktop_tool],
     )
+    if output_schema is not None:
+        kwargs["output_schema"] = output_schema
+    return Agent(**kwargs)
 
 
 def build_agents(
@@ -277,8 +284,11 @@ def build_agents(
     desktop_model: str = DEFAULT_DESKTOP_MODEL,
     planner_model: str = DEFAULT_PLANNER_MODEL,
     extra_tools: Optional[list] = None,
+    output_schema: Optional[type] = None,
 ) -> tuple[Agent, Agent]:
     """Return (parent_agent, desktop_agent) for the requested model strings."""
     desktop_agent = build_desktop_agent(desktop_model, extra_tools=extra_tools)
-    parent_agent = build_parent_agent(planner_model, desktop_agent)
+    parent_agent = build_parent_agent(
+        planner_model, desktop_agent, output_schema=output_schema
+    )
     return parent_agent, desktop_agent
