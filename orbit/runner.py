@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
+from google.adk.apps.app import App, EventsCompactionConfig
 from google.adk.runners import Runner, RunConfig
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
@@ -60,7 +61,6 @@ def _setup_logging(*, verbose: bool = False) -> None:
     handler.setFormatter(fmt)
     logger.addHandler(handler)
     logger.propagate = False
-
 
 
 class _LatencyTracker:
@@ -173,7 +173,9 @@ class Agent:
 
         session_service = InMemorySessionService()
         session = await session_service.create_session(
-            app_name="desktop_app", user_id="local_admin", session_id="session_001",
+            app_name="desktop_app",
+            user_id="local_admin",
+            session_id="session_001",
             state={"_orbit_max_calls": self.max_steps},
         )
 
@@ -199,9 +201,16 @@ class Agent:
 
         parent_agent, _desktop_agent = build_agents(**build_kwargs)
 
+        app = App(
+            name="desktop_app",
+            root_agent=parent_agent,
+            events_compaction_config=EventsCompactionConfig(
+                compaction_interval=3,
+                overlap_size=1,
+            ),
+        )
         runner = Runner(
-            agent=parent_agent,
-            app_name="desktop_app",
+            app=app,
             session_service=session_service,
             artifact_service=InMemoryArtifactService(),
         )
@@ -209,7 +218,9 @@ class Agent:
         content = types.Content(role="user", parts=[types.Part(text=prompt)])
         run_config = RunConfig(max_llm_calls=self.max_steps)
         events = runner.run_async(
-            session_id=session.id, user_id=user_id, new_message=content,
+            session_id=session.id,
+            user_id=user_id,
+            new_message=content,
             run_config=run_config,
         )
 
@@ -291,9 +302,16 @@ class Agent:
                             )
                         if latency:
                             step_sec = latency.on_function_call(name, args)
-                            log.debug("[%.3fs] %s(%s)", step_sec, name, _console_safe(args))
+                            log.debug(
+                                "[%.3fs] %s(%s)", step_sec, name, _console_safe(args)
+                            )
                         else:
-                            log.debug("[%.2fs] %s(%s)", round(now - _last, 2), name, _console_safe(args))
+                            log.debug(
+                                "[%.2fs] %s(%s)",
+                                round(now - _last, 2),
+                                name,
+                                _console_safe(args),
+                            )
                         _last = now
                     elif getattr(part, "function_response", None):
                         name = getattr(part.function_response, "name", "?")
@@ -310,13 +328,24 @@ class Agent:
                         # Collect tool errors for RunResult.
                         resp = getattr(part.function_response, "response", None)
                         if isinstance(resp, dict) and resp.get("status") == "error":
-                            errors.append(f"{name}: {resp.get('message', 'unknown error')}")
+                            errors.append(
+                                f"{name}: {resp.get('message', 'unknown error')}"
+                            )
 
                         if latency:
                             tool_sec = latency.on_function_response(name)
-                            log.debug("[tool %.3fs] %s -> %s", tool_sec, name, _console_safe(part.function_response.response))
+                            log.debug(
+                                "[tool %.3fs] %s -> %s",
+                                tool_sec,
+                                name,
+                                _console_safe(part.function_response.response),
+                            )
                         else:
-                            log.debug("%s -> %s", name, _console_safe(part.function_response.response))
+                            log.debug(
+                                "%s -> %s",
+                                name,
+                                _console_safe(part.function_response.response),
+                            )
                         _last = time.time()
 
         # Clean up any lingering spinner.
@@ -333,9 +362,13 @@ class Agent:
         latency_summary = latency.summary() if latency else {}
         # Re-read session to get state updates from callbacks.
         updated_session = await session_service.get_session(
-            app_name="desktop_app", user_id="local_admin", session_id=session.id,
+            app_name="desktop_app",
+            user_id="local_admin",
+            session_id=session.id,
         )
-        llm_calls_used = (updated_session.state if updated_session else session.state).get("_orbit_call_count", 0)
+        llm_calls_used = (
+            updated_session.state if updated_session else session.state
+        ).get("_orbit_call_count", 0)
         latency_summary["llm_calls"] = llm_calls_used
         latency_summary["max_llm_calls"] = self.max_steps
         if latency:
