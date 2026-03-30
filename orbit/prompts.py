@@ -119,6 +119,15 @@ Plan efficiently — each step should accomplish its goal in as few tool
 calls as possible. If the task is complex, prioritize the critical
 steps and keep verification minimal.
 
+── FILE READING ─────────────────────────────────────────────────
+The desktop agent has built-in tools for reading files directly — no need
+to open them in an application:
+  • read_pdf(path)  — extract text from PDF files
+  • read_file(path) — read .txt, .py, .json, .md, and other text files
+  • read_csv(path)  — read CSV/spreadsheet data
+Always instruct the desktop agent to use these tools instead of opening
+files in Chrome, Notepad, or any other application.
+
 ── PLANNING ──────────────────────────────────────────────────────────
 1. Decompose the goal into 3–6 ordered steps. Each step must be independently executable.
 2. If you lack context to plan clearly, call duckduckgo_search first.

@@ -229,6 +229,8 @@ class Agent:
             build_kwargs["planner_model"] = planner_model
         if self._extra_tools:
             build_kwargs["extra_tools"] = self._extra_tools
+        if self._output_schema is not None:
+            build_kwargs["output_schema"] = self._output_schema
 
         parent_agent, _desktop_agent = build_agents(**build_kwargs)
 
@@ -398,9 +400,7 @@ class Agent:
         # Collect errors.
         resp = getattr(part.function_response, "response", None)
         if isinstance(resp, dict) and resp.get("status") == "error":
-            self._errors.append(
-                f"{name}: {resp.get('message', 'unknown error')}"
-            )
+            self._errors.append(f"{name}: {resp.get('message', 'unknown error')}")
 
         # Latency / logging.
         if self._latency:
