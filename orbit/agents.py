@@ -8,12 +8,8 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.models import Gemini, LiteLlm
-from google.genai.errors import ClientError
 from typing import Optional
-import json
 import logging
-import os
-import tempfile
 
 log = logging.getLogger("orbit.agents")
 
@@ -101,111 +97,6 @@ def make_lite_llm(model: str):
     return LiteLlm(model)
 
 
-_DUMP_DIR = os.path.join(tempfile.gettempdir(), "orbit_llm_dumps")
-_call_counter = 0
-
-
-def _dump_llm_request(llm_request: LlmRequest, tag: str = "") -> str:
-    """Serialize an LlmRequest to a JSON file for debugging 400 errors."""
-    global _call_counter
-    _call_counter += 1
-    os.makedirs(_DUMP_DIR, exist_ok=True)
-    path = os.path.join(_DUMP_DIR, f"call_{_call_counter:04d}_{tag}.json")
-    try:
-        payload = {
-            "call_number": _call_counter,
-            "tag": tag,
-            "model": getattr(llm_request, "model", None),
-            "num_contents": len(llm_request.contents) if llm_request.contents else 0,
-            "contents_summary": [],
-            "config_keys": [],
-            "sys_instruction_len": 0,
-            "num_tools": 0,
-        }
-        if llm_request.contents:
-            for i, c in enumerate(llm_request.contents):
-                parts_info = []
-                for p in c.parts or []:
-                    if getattr(p, "text", None) is not None:
-                        parts_info.append(
-                            {
-                                "type": "text",
-                                "len": len(p.text),
-                                "preview": p.text[:200],
-                            }
-                        )
-                    elif getattr(p, "function_call", None):
-                        parts_info.append(
-                            {"type": "function_call", "name": p.function_call.name}
-                        )
-                    elif getattr(p, "function_response", None):
-                        parts_info.append(
-                            {
-                                "type": "function_response",
-                                "name": p.function_response.name,
-                            }
-                        )
-                    elif getattr(p, "inline_data", None):
-                        parts_info.append(
-                            {
-                                "type": "inline_data",
-                                "mime": getattr(p.inline_data, "mime_type", "?"),
-                            }
-                        )
-                    else:
-                        parts_info.append({"type": "other"})
-                payload["contents_summary"].append(
-                    {"index": i, "role": c.role, "parts": parts_info}
-                )
-        if llm_request.config:
-            cfg = llm_request.config
-            if cfg.system_instruction:
-                si = cfg.system_instruction
-                if isinstance(si, str):
-                    payload["sys_instruction_len"] = len(si)
-                elif hasattr(si, "parts") and si.parts:
-                    payload["sys_instruction_len"] = sum(
-                        len(getattr(p, "text", "") or "") for p in si.parts
-                    )
-            if cfg.tools:
-                total_decls = 0
-                for t in cfg.tools:
-                    if hasattr(t, "function_declarations") and t.function_declarations:
-                        total_decls += len(t.function_declarations)
-                payload["num_tools"] = total_decls
-            payload["config_keys"] = [
-                k
-                for k, v in (
-                    cfg.model_dump(exclude_none=True)
-                    if hasattr(cfg, "model_dump")
-                    else {}
-                ).items()
-                if v is not None
-            ]
-            # Dump the FULL config as JSON for diagnosis
-            try:
-                payload["full_config"] = (
-                    cfg.model_dump(exclude_none=True)
-                    if hasattr(cfg, "model_dump")
-                    else str(cfg)
-                )
-            except Exception:
-                payload["full_config"] = str(cfg)
-        with open(path, "w", encoding="utf-8", errors="replace") as f:
-            json.dump(payload, f, indent=2, default=str)
-        log.debug("Dumped LLM request #%d (%s) -> %s", _call_counter, tag, path)
-        log.debug(
-            "  model=%s contents=%d sys_len=%d tools=%d",
-            payload["model"],
-            payload["num_contents"],
-            payload["sys_instruction_len"],
-            payload["num_tools"],
-        )
-    except Exception as e:
-        log.warning("Failed to dump LLM request: %s", e)
-    return path
-
-
 _BUDGET_WARNING_THRESHOLD = 5  # Warn when this many calls remain.
 
 
@@ -217,8 +108,6 @@ async def inject_screenshot_callback(
     1. Track call count; hard-stop when budget exhausted, warn when running low.
     2. Inject screenshot artifacts as inline images.
     """
-    _dump_llm_request(llm_request, tag="desktop_before_model")
-
     # ── Budget tracking ────────────────────────────────────────────
     call_num = callback_context.state.get("_orbit_call_count", 0) + 1
     callback_context.state["_orbit_call_count"] = call_num
@@ -309,40 +198,7 @@ def parent_prompt_provider(context: ReadonlyContext) -> str:
     return PARENT_SYSTEM_PROMPT
 
 
-def _handle_model_error(
-    callback_context: CallbackContext,
-    llm_request: LlmRequest,
-    error: Exception,
-) -> Optional[LlmResponse]:
-    """Handle 400 INVALID_ARGUMENT by dumping the full request for diagnosis."""
-    is_400 = isinstance(error, ClientError) and getattr(error, "code", None) == 400
-    path = _dump_llm_request(llm_request, tag="ERROR_400" if is_400 else "ERROR_other")
-    log.error("Model error: %s: %s", type(error).__name__, error)
-    log.error("Request dumped to: %s", path)
-    if is_400:
-        try:
-            err_path = os.path.join(
-                _DUMP_DIR, f"call_{_call_counter:04d}_FULL_CONFIG.json"
-            )
-            full = {}
-            if llm_request.config and hasattr(llm_request.config, "model_dump"):
-                full["config"] = llm_request.config.model_dump(mode="json")
-            if llm_request.contents:
-                full["contents"] = [
-                    c.model_dump(mode="json", exclude_none=True)
-                    for c in llm_request.contents
-                ]
-            full["model"] = getattr(llm_request, "model", None)
-            with open(err_path, "w", encoding="utf-8", errors="replace") as f:
-                json.dump(full, f, indent=2, default=str)
-            log.error("Full config dumped to: %s", err_path)
-        except Exception as dump_err:
-            log.error("Failed to dump full config: %s", dump_err, exc_info=True)
-    # Re-raise — don't swallow the error, just log it
-    return None
-
-
-def build_desktop_agent(desktop_model: str) -> Agent:
+def build_desktop_agent(desktop_model: str, extra_tools: Optional[list] = None) -> Agent:
     return Agent(
         model=make_lite_llm(desktop_model),
         name=DESKTOP_EXECUTOR_AGENT_NAME,
@@ -353,7 +209,6 @@ def build_desktop_agent(desktop_model: str) -> Agent:
         instruction=system_prompt_provider,
         before_model_callback=inject_screenshot_callback,
         before_agent_callback=capture_phase_instruction_before_agent_callback,
-        on_model_error_callback=_handle_model_error,
         tools=[
             list_active_windows,
             manage_window,
@@ -397,7 +252,7 @@ def build_desktop_agent(desktop_model: str) -> Agent:
             get_popuphost_menu_window,
             upload_file_approval,
             request_human,
-        ],
+        ] + (extra_tools or []),
     )
 
 
@@ -421,8 +276,9 @@ def build_agents(
     *,
     desktop_model: str = DEFAULT_DESKTOP_MODEL,
     planner_model: str = DEFAULT_PLANNER_MODEL,
+    extra_tools: Optional[list] = None,
 ) -> tuple[Agent, Agent]:
     """Return (parent_agent, desktop_agent) for the requested model strings."""
-    desktop_agent = build_desktop_agent(desktop_model)
+    desktop_agent = build_desktop_agent(desktop_model, extra_tools=extra_tools)
     parent_agent = build_parent_agent(planner_model, desktop_agent)
     return parent_agent, desktop_agent
