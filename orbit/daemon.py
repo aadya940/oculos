@@ -14,7 +14,6 @@ class OculOSManager:
     def __init__(
         self,
         binary_path: str = r"C:\Users\aadya\Desktop\oculos\target\release\oculos.exe",
-        verbose: bool = False,
     ):
         """Manages the lifecycle of the OculOS background daemon."""
         if binary_path is None:
@@ -29,7 +28,6 @@ class OculOSManager:
         self.binary_path = Path(binary_path).resolve()
         self.process = None
         self.base_url = "http://127.0.0.1:7878"
-        self.verbose = verbose
 
         atexit.register(self.stop)
 

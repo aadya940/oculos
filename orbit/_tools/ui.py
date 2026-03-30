@@ -902,38 +902,6 @@ async def take_screenshot(tool_context: ToolContext) -> Dict[str, Any]:
         return {"status": "error", "message": str(e)}
 
 
-def mouse_click(x: int, y: int) -> Dict[str, Any]:
-    """
-    Clicks at specific screen coordinates.
-    Only use after take_screenshot to know exact coordinates.
-
-    Args:
-        x (int): X coordinate in pixels.
-        y (int): Y coordinate in pixels.
-    """
-    try:
-        pyautogui.click(x, y)
-        return {"status": "success", "message": f"Clicked at ({x}, {y})."}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-def mouse_type(text: str) -> Dict[str, Any]:
-    """
-    Types text at the current cursor position.
-    Always call mouse_click first to focus the right element.
-
-    Args:
-        text (str): Text to type.
-    """
-    try:
-        pyperclip.copy(text)
-        pyautogui.hotkey("ctrl", "v")
-        return {"status": "success", "message": f"Typed text successfully."}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
 def scroll_page(direction: str, amount: int = 3) -> Dict[str, Any]:
     """
     Scrolls the current browser page or any focused window.

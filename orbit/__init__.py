@@ -1,5 +1,5 @@
-from .agents import desktop_agent, parent_agent
+from .agents import build_agents
 from .daemon import OculOSManager
 from .runner import Agent, RunResult
 
-__all__ = ["desktop_agent", "parent_agent", "OculOSManager", "Agent", "RunResult"]
+__all__ = ["build_agents", "OculOSManager", "Agent", "RunResult"]
