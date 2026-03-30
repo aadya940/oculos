@@ -170,15 +170,35 @@ def _dump_llm_request(llm_request: LlmRequest, tag: str = "") -> str:
     return path
 
 
+_BUDGET_WARNING_THRESHOLD = 5  # Warn when this many calls remain.
+
+
 async def inject_screenshot_callback(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> None:
     """
-    Finds screenshot artifacts in the most recent tool responses and injects
-    them as inline images so the model can actually see them.
-    Also dumps every request for debugging 400 errors.
+    Before each desktop agent LLM call:
+    1. Track call count and inject a budget warning when running low.
+    2. Inject screenshot artifacts as inline images.
     """
     _dump_llm_request(llm_request, tag="desktop_before_model")
+
+    # ── Budget tracking ────────────────────────────────────────────
+    call_num = callback_context.state.get("_orbit_call_count", 0) + 1
+    callback_context.state["_orbit_call_count"] = call_num
+    max_calls = callback_context.state.get("_orbit_max_calls", 30)
+    remaining = max(0, max_calls - call_num)
+
+    if remaining <= _BUDGET_WARNING_THRESHOLD and llm_request.contents:
+        llm_request.contents.append(
+            types.Content(
+                role="user",
+                parts=[types.Part(
+                    text=f"[BUDGET] {remaining} LLM calls remaining. "
+                         "Finish the current step now and return."
+                )],
+            )
+        )
 
     if not llm_request.contents:
         return None
