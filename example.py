@@ -6,7 +6,7 @@ from orbit import Agent, RunResult, Do, Read, Check, Navigate, Fill, session
 
 load_dotenv()
 
-# ── Example 1: Simple agent (backward compatible) ────────────────
+#    Example 1: Simple agent 
 
 
 async def example_simple():
@@ -29,8 +29,7 @@ async def example_simple():
         )
 
 
-# ── Example 2: Composable verbs with session ─────────────────────
-
+#    Example 2: Composable verbs with session     
 
 async def example_verbs():
     """Use verbs for programmatic screen control with shared daemon."""
@@ -62,26 +61,28 @@ async def example_verbs():
         ).run()
 
 
-# ── Example 3: Custom domain agent ───────────────────────────────
+#    Example 3: Custom domain agent 
 
-# from orbit import BaseActionAgent
-# from pydantic import BaseModel
-#
-# class ResumeData(BaseModel):
-#     name: str
-#     skills: list[str]
-#     experience_years: int
-#
-# class ReadResume(Read):
-#     def __init__(self, path: str, **kw):
-#         super().__init__(f"read the resume at {path}", schema=ResumeData, **kw)
-#
-# async def example_domain_agent():
-#     async with session() as s:
-#         result = await ReadResume("Desktop/RESUME.pdf", session=s).run()
-#         print(result.output)  # ResumeData instance
+from orbit import BaseActionAgent
+from pydantic import BaseModel
+
+class ResumeData(BaseModel):
+    name: str
+    skills: list[str]
+    experience_years: int
+
+class ReadResume(Read):
+    def __init__(self, path: str, **kw):
+        super().__init__(f"read the resume at {path}", schema=ResumeData, **kw)
+
+async def example_domain_agent():
+    async with session() as s:
+        result = await ReadResume("Desktop/RESUME.pdf", session=s).run()
+        print(result.output)  # ResumeData instance
 
 
 if __name__ == "__main__":
-    asyncio.run(example_verbs())
     # asyncio.run(example_verbs())
+    # asyncio.run(example_verbs())
+    asyncio.run(example_domain_agent())
+    
