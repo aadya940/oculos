@@ -7,7 +7,8 @@ from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
-from google.adk.models import Gemini, LiteLlm
+from google.adk.models import Gemini
+from google.adk.models.lite_llm import LiteLlm
 from typing import Any, Optional
 import logging
 
@@ -95,7 +96,7 @@ def make_lite_llm(model: str):
         for part in reversed(parts):
             if part.startswith("gemini-"):
                 return Gemini(model=part)
-    return LiteLlm(model)
+    return LiteLlm(model=model)
 
 
 _BUDGET_WARNING_THRESHOLD = 5  # Warn when this many calls remain.
