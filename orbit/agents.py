@@ -17,6 +17,7 @@ from .prompts import SYSTEM_PROMPT, PARENT_SYSTEM_PROMPT
 from ._tools.ui import (
     list_active_windows,
     manage_window,
+    take_screenshot,
     fill_form_fields,
     find_ui_elements,
     find_ui_elements_hwnd,
@@ -275,6 +276,7 @@ def build_desktop_agent(
             press_hotkey,
             navigate_to_url,
             launch_and_get_pid,
+            take_screenshot,
             get_popuphost_menu_window,
             upload_file_approval,
             request_human,

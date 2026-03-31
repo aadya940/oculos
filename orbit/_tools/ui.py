@@ -921,7 +921,8 @@ async def take_screenshot(tool_context: ToolContext) -> Dict[str, Any]:
     """
     Takes a screenshot of the current screen for visual analysis.
     Use this when accessibility tools fail to find an element.
-    After calling this, analyze the image and use mouse_click(x, y) to interact.
+    After calling this, analyze the image and then continue using standard UI tools
+    (find_ui_elements / get_window_tree / interact_with_element) to act.
     """
     try:
         screenshot = pyautogui.screenshot()
