@@ -29,7 +29,7 @@ asyncio.run(main())
 
 ## Composable SDK
 
-For multi-step workflows, use verbs with a shared session:
+For more controlled workflows, use verbs with a shared session in a pythonic way:
 
 ```python
 from orbit import Do, Read, Check, Navigate, Fill, session
