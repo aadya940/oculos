@@ -126,10 +126,12 @@ class Agent:
         max_steps: int = 30,
         session: Optional[Any] = None,
         output_schema: Optional[Any] = None,
+        extra_info: Optional[str] = None,
         extra_tools: Optional[list] = None,
         human_in_the_loop: Optional[HumanInTheLoopHandler] = None,
     ):
         self.task = task
+        self.extra_info = extra_info.strip() if isinstance(extra_info, str) else None
         self.llm = llm
         self.desktop_llm = desktop_llm
         self.planner_llm = planner_llm
@@ -183,7 +185,7 @@ class Agent:
     # ── Core orchestration ────────────────────────────────────────
 
     async def _run(self) -> RunResult:
-        prompt = self.task
+        prompt = self._compose_prompt(self.task, self.extra_info)
         self._ui = OrbitConsole(verbose=self.verbose)
         self._ui.task_start(prompt)
 
@@ -308,16 +310,7 @@ class Agent:
                     raise KeyError(
                         f"Missing ADK output_key={output_key!r} in session.state"
                     )
-                model_validate_json = getattr(
-                    self._output_schema, "model_validate_json", None
-                )
-                if callable(model_validate_json):
-                    self._final_output = self._output_schema.model_validate_json(
-                        json_text
-                    )
-                else:
-                    data = json.loads(json_text)
-                    self._final_output = self._output_schema.model_validate(data)
+                self._final_output = self._validate_schema_json(json_text)
             except Exception as e:
                 # Fallback: parse from the final response text if output_key is missing.
                 # Keep strict validation semantics: if validation fails, mark run failed.
@@ -327,16 +320,7 @@ class Agent:
                         raise ValueError(
                             "Final response text is not valid JSON payload"
                         )
-                    model_validate_json = getattr(
-                        self._output_schema, "model_validate_json", None
-                    )
-                    if callable(model_validate_json):
-                        self._final_output = self._output_schema.model_validate_json(
-                            payload
-                        )
-                    else:
-                        data = json.loads(payload)
-                        self._final_output = self._output_schema.model_validate(data)
+                    self._final_output = self._validate_schema_json(payload)
                 except Exception as e2:
                     status = "failed"
                     self._errors.append(
@@ -360,6 +344,17 @@ class Agent:
             errors=self._errors,
             latency=latency_summary,
             journal=self._journal.to_dict(),
+        )
+
+    @staticmethod
+    def _compose_prompt(task: str, extra_info: Optional[str]) -> str:
+        """Build the ADK user prompt from task plus optional advisory hints."""
+        base_task = (task or "").strip()
+        if not extra_info:
+            return base_task
+        return (
+            f"PRIMARY_TASK:\n{base_task}\n\n"
+            f"EXTRA_INFO (advisory context):\n{extra_info}"
         )
 
     # ── Event dispatch ────────────────────────────────────────────
@@ -403,37 +398,33 @@ class Agent:
             self._final_text = _console_safe(text) if text else ""
             self._ui.agent_done(self._final_text)
 
-    def _decode_structured_output(self, text: str) -> Any:
-        """Best-effort decode of ADK final text into schema-typed output."""
+    def _validate_schema_json(self, json_text: str) -> Any:
+        """Strict schema validation from a JSON string with light dict coercion."""
         schema = self._output_schema
         if not schema:
-            return text
+            return json_text
 
-        payload = self._extract_json_payload(text)
-        if payload is None:
-            return text
+        model_validate_json = getattr(schema, "model_validate_json", None)
+        if callable(model_validate_json):
+            try:
+                return schema.model_validate_json(json_text)
+            except Exception:
+                # Fall through to dict-level coercion path.
+                pass
+
+        data = json.loads(json_text)
+        validate = getattr(schema, "model_validate", None)
+        if not callable(validate):
+            return data
 
         try:
-            data = json.loads(payload)
+            return schema.model_validate(data)
         except Exception:
-            return text
-
-        validate = getattr(schema, "model_validate", None)
-        if callable(validate):
-            try:
-                if isinstance(data, list):
-                    return [schema.model_validate(item) for item in data]
-                if isinstance(data, dict):
-                    try:
-                        return schema.model_validate(data)
-                    except Exception:
-                        coerced = self._coerce_dict_for_schema(schema, data)
-                        if coerced is not None:
-                            return schema.model_validate(coerced)
-                        raise
-            except Exception:
-                return data
-        return data
+            if isinstance(data, dict):
+                coerced = self._coerce_dict_for_schema(schema, data)
+                if coerced is not None:
+                    return schema.model_validate(coerced)
+            raise
 
     @staticmethod
     def _coerce_dict_for_schema(schema: Any, data: dict) -> Optional[dict]:
