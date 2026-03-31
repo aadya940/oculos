@@ -45,7 +45,12 @@ def run_toast_ui(kind: str, context: dict[str, Any]) -> dict[str, Any]:
     )
     orbit_lbl.pack(anchor="w", pady=(0, 3))
 
-    subtitle = "Permission required" if kind == "approval" else "Human step"
+    if kind == "approval":
+        subtitle = "Permission required"
+    elif kind == "completion":
+        subtitle = "All tasks complete"
+    else:
+        subtitle = "Human step"
     sub_lbl = tk.Label(
         card, text=subtitle, fg="#000000", bg="#ffffff", font=font_heading
     )
@@ -86,6 +91,12 @@ def run_toast_ui(kind: str, context: dict[str, Any]) -> dict[str, Any]:
             body.insert(tk.END, context["directory"], "path")
         else:
             body.insert(tk.END, "", "body")
+    elif kind == "completion":
+        desc = context.get(
+            "description",
+            "Orbit has finished all tasks. You can use your screen now.",
+        )
+        body.insert(tk.END, desc, "body")
     else:
         desc = context.get("description", "Complete the requested step.")
         body.insert(tk.END, desc, "body")
