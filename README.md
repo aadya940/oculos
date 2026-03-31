@@ -8,38 +8,6 @@ Most CUA frameworks either automate the complete task as a black box or expose r
 
 Orbit uses the OS accessibility tree instead of screenshots or DOM parsing, which means less token usage and direct access to UI elements across both desktop apps and browsers.
 
-## Installation
-
-```bash
-git clone --recurse-submodules https://github.com/AadyaOrbit/orbit.git
-cd orbit
-
-# Build the OculOS daemon (requires Rust)
-cd oculos && cargo build --release && cd ..
-mkdir -p orbit/_bin
-# Windows:
-copy oculos\target\release\oculos.exe orbit\_bin\oculos.exe
-# Linux/macOS:
-# cp oculos/target/release/oculos orbit/_bin/oculos
-
-pip install .
-```
-
-Set your API key for whichever provider you use. Orbit supports any model via [LiteLLM](https://docs.litellm.ai/):
-
-```bash
-# Gemini
-export GEMINI_API_KEY="your-key"
-
-# OpenAI
-export OPENAI_API_KEY="your-key"
-
-# Anthropic
-export ANTHROPIC_API_KEY="your-key"
-```
-
-> `pip install orbit-agent` coming soon.
-
 ## Standalone Agent
 
 For one-shot tasks, just describe what you want:
@@ -88,6 +56,38 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## Installation
+
+```bash
+git clone --recurse-submodules https://github.com/AadyaOrbit/orbit.git
+cd orbit
+
+# Build the OculOS daemon (requires Rust)
+cd oculos && cargo build --release && cd ..
+mkdir -p orbit/_bin
+# Windows:
+copy oculos\target\release\oculos.exe orbit\_bin\oculos.exe
+# Linux/macOS:
+# cp oculos/target/release/oculos orbit/_bin/oculos
+
+pip install .
+```
+
+Set your API key for whichever provider you use. Orbit supports any model via [LiteLLM](https://docs.litellm.ai/):
+
+```bash
+# Gemini
+export GEMINI_API_KEY="your-key"
+
+# OpenAI
+export OPENAI_API_KEY="your-key"
+
+# Anthropic
+export ANTHROPIC_API_KEY="your-key"
+```
+
+> `pip install orbit-agent` coming soon.
 
 ## Safety
 
