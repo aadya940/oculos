@@ -4,7 +4,7 @@
 
 Orbit is a composable toolkit for building Computer Use Agents (CUAs). It provides both a standalone multi-step agent and a composable SDK.
 
-Most CUA frameworks either automate the complete task as a black box or expose raw tools with no structure. Orbit sits in between — natural language controls the screen, Python controls the flow. Each primitive (`Do`, `Read`, `Check`, `Navigate`, `Fill`) is an independent agent with its own budget, model, and typed output, but they share context within a session. This means you can use a lightweight model for simple clicks and a heavier model for complex tasks, control max LLM calls per step, and extract structured data from the screen into Pydantic models.
+Most CUA frameworks either automate the complete task as a black box or expose raw tools with no structure. Orbit sits in between , natural language controls the screen, Python controls the flow. Each primitive (`Do`, `Read`, `Check`, `Navigate`, `Fill`) is an independent agent with its own budget, model, and typed output, but they share context within a session. This means you can use a lightweight model for simple clicks and a heavier model for complex tasks, control max LLM calls per step, and extract structured data from the screen into Pydantic models.
 
 Orbit uses the OS accessibility tree instead of screenshots or DOM parsing, which means less token usage and direct access to UI elements across both desktop apps and browsers.
 
@@ -82,7 +82,7 @@ asyncio.run(main())
 
 ## Safety
 
-Orbit never permanently deletes files — destructive operations go to Trash/Recycle Bin. Disk writes require human approval via a configurable callback.
+Orbit never permanently deletes files , destructive operations go to Trash/Recycle Bin. Disk writes require human approval via a configurable callback.
 
 ## License
 
