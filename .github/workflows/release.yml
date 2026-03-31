@@ -51,11 +51,65 @@ jobs:
           fi
         shell: bash
 
-      - name: Build Orbit wheels
-        run: python -m build
+      - name: Build Orbit wheel only
+        run: python -m build --wheel
+
+      - name: Verify wheel is platform-specific (not none-any)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          wheels = sorted(pathlib.Path("dist").glob("*.whl"))
+          if not wheels:
+              raise SystemExit("No wheel found in dist/")
+          wheel = wheels[-1]
+          name = wheel.name
+          print(f"Built wheel: {name}")
+          m = re.match(r".+-(?P<py>[^-]+)-(?P<abi>[^-]+)-(?P<plat>[^-]+)\.whl$", name)
+          if not m:
+              raise SystemExit(f"Could not parse wheel tag from: {name}")
+          tag = f"{m.group('py')}-{m.group('abi')}-{m.group('plat')}"
+          print(f"Wheel tag: {tag}")
+          if m.group("abi") == "none" and m.group("plat") == "any":
+              raise SystemExit(
+                  "Wheel is pure Python (none-any) but package bundles native binaries."
+              )
+          PY
+
+      - name: Install built wheel
+        shell: bash
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+
+      - name: Smoke test import and bundled binary
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import platform
+          import orbit
+
+          pkg_dir = pathlib.Path(orbit.__file__).resolve().parent
+          bin_dir = pkg_dir / "_bin"
+          if platform.system() == "Windows":
+              expected = bin_dir / "oculos.exe"
+          else:
+              expected = bin_dir / "oculos"
+          print(f"Checking bundled binary at: {expected}")
+          if not expected.exists():
+              raise SystemExit(f"Missing bundled OculOS binary: {expected}")
+          if platform.system() != "Windows" and not os.access(expected, os.X_OK):
+              raise SystemExit(f"Bundled OculOS binary is not executable: {expected}")
+          print("Smoke test passed.")
+          PY
 
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*
+          
