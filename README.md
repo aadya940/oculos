@@ -42,9 +42,9 @@ class Product(BaseModel):
     in_stock: bool
 
 async def main():
-    # Use lighter models for routine actions and a stronger one for extraction.
-    action_model = "gemini-3.1-flash-lite-preview"
-    extract_model = "gemini-3-pro-preview"
+    # Use lighter models plus stronger model
+    extract_model = "gemini-3.1-flash-lite-preview"
+    action_model = "gemini-3-pro-preview"
 
     async with session() as s:
         await Navigate(
