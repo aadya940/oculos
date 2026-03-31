@@ -35,6 +35,9 @@ For multi-step workflows, use verbs with a shared session:
 from orbit import Do, Read, Check, Navigate, Fill, session
 from pydantic import BaseModel
 import asyncio
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class Product(BaseModel):
     name: str
@@ -45,20 +48,12 @@ class ProductList(BaseModel):
     products: list[Product]
 
 async def main():
-    # Use lighter models for routine actions and a stronger one for extraction.
-    action_model = "gemini-3.1-flash-lite-preview"
-    extract_model = "gemini-3-pro-preview"
+    # Use lighter model(s) or stronger model(s).
+    action_model = "gemini-3-flash-preview"
 
     async with session() as s:
         await Navigate(
-            "amazon.com",
-            session=s,
-            llm=action_model,
-            max_steps=30,
-            verbose=True,
-        ).run()
-        await Do(
-            "search for 'mechanical keyboard'",
+            "https://www.amazon.com/s?k=mechanical+keyboard",
             session=s,
             llm=action_model,
             max_steps=30,
@@ -69,10 +64,13 @@ async def main():
             "the search results",
             schema=ProductList,
             session=s,
-            llm=extract_model,
+            llm=action_model,
             max_steps=30,
             verbose=True,
         ).run()
+
+        if products.status != "success" or products.output is None:
+            raise RuntimeError(f"Read failed: status={products.status} summary={products.summary!r}")
 
         cheapest = min(products.output.products, key=lambda p: p.price)
         await Do(
