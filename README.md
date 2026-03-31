@@ -195,6 +195,8 @@ copy oculos\target\release\oculos.exe orbit\_bin\oculos.exe
 pip install .
 ```
 
+macOS users might need to grant additional permissions for UI Interaction as defined [here](https://github.com/huseyinstif/oculos?tab=readme-ov-file#macos-grant-accessibility-permission).
+
 Set your API key for whichever provider you use. Orbit supports any model via [LiteLLM](https://docs.litellm.ai/):
 
 ```bash
