@@ -3,7 +3,7 @@ requires = ["setuptools>=69.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "orbit"
+name = "orbit-cua"
 version = "0.1.0"
 description = "General computer-use agent."
 readme = "README.md"

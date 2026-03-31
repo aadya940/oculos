@@ -180,6 +180,14 @@ asyncio.run(main())
 
 ## Installation
 
+Install from PyPI:
+
+```bash
+pip install orbit-cua
+```
+
+Install from Source:
+
 ```bash
 git clone --recurse-submodules https://github.com/aadya940/orbit.git
 cd orbit
@@ -210,7 +218,6 @@ export OPENAI_API_KEY="your-key"
 export ANTHROPIC_API_KEY="your-key"
 ```
 
-> `pip install orbit-agent` coming soon.
 
 ## Safety
 
@@ -219,5 +226,3 @@ Orbit never permanently deletes files , destructive operations go to Trash/Recyc
 ## License
 
 Apache License 2.0
-</content>
-</invoke>

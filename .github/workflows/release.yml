@@ -112,4 +112,22 @@ jobs:
         with:
           name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*
-          
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    # Avoid publishing ad-hoc workflow_dispatch runs; only tag pushes (e.g. v0.1.0).
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
