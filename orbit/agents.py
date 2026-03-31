@@ -219,8 +219,10 @@ def build_desktop_agent(
     extra_tools: Optional[list] = None,
     max_calls: int = 30,
     budget_counter: Optional[dict[str, int]] = None,
+    output_schema: Optional[type] = None,
+    output_key: Optional[str] = None,
 ) -> Agent:
-    return Agent(
+    kwargs: dict[str, Any] = dict(
         model=make_lite_llm(desktop_model),
         name=DESKTOP_EXECUTOR_AGENT_NAME,
         description="""Handles all desktop UI automation: browser control, forms, dropdowns,
@@ -279,6 +281,11 @@ def build_desktop_agent(
         ]
         + (extra_tools or []),
     )
+    if output_schema is not None:
+        kwargs["output_schema"] = output_schema
+    if output_key is not None:
+        kwargs["output_key"] = output_key
+    return Agent(**kwargs)
 
 
 def build_parent_agent(
@@ -308,23 +315,29 @@ def build_agents(
     *,
     desktop_model: str = DEFAULT_DESKTOP_MODEL,
     planner_model: str = DEFAULT_PLANNER_MODEL,
+    planner: bool = True,
     extra_tools: Optional[list] = None,
     output_schema: Optional[type] = None,
     max_calls: int = 30,
     budget_counter: Optional[dict[str, int]] = None,
     output_key: Optional[str] = None,
 ) -> tuple[Agent, Agent]:
-    """Return (parent_agent, desktop_agent) for the requested model strings."""
+    """Return (root_agent, desktop_agent) for the requested model strings."""
     desktop_agent = build_desktop_agent(
         desktop_model,
         extra_tools=extra_tools,
         max_calls=max_calls,
         budget_counter=budget_counter,
+        output_schema=output_schema if not planner else None,
+        output_key=output_key if not planner else None,
     )
-    parent_agent = build_parent_agent(
-        planner_model,
-        desktop_agent,
-        output_schema=output_schema,
-        output_key=output_key,
-    )
-    return parent_agent, desktop_agent
+    if planner:
+        root_agent = build_parent_agent(
+            planner_model,
+            desktop_agent,
+            output_schema=output_schema,
+            output_key=output_key,
+        )
+    else:
+        root_agent = desktop_agent
+    return root_agent, desktop_agent

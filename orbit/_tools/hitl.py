@@ -22,7 +22,10 @@ async def _confirm_and_run(
     """
     loop = asyncio.get_running_loop()
     decision = await loop.run_in_executor(
-        _toast_pool, run_toast_ui, "approval", {"tool": tool, **kwargs},
+        _toast_pool,
+        run_toast_ui,
+        "approval",
+        {"tool": tool, **kwargs},
     )
     if decision.get("status") != "approved":
         return {"status": "rejected", "message": "Rejected by user.", "tool": tool}
@@ -36,7 +39,9 @@ async def _confirm_and_run(
 
 async def write_file(path: str, content: str) -> Dict[str, Any]:
     """Writes content to a file. Creates the file if it doesn't exist. Requires approval."""
-    return await _confirm_and_run("write_file", _fs.write_file, path=path, content=content)
+    return await _confirm_and_run(
+        "write_file", _fs.write_file, path=path, content=content
+    )
 
 
 async def append_to_file(path: str, content: str) -> Dict[str, Any]:
@@ -46,9 +51,13 @@ async def append_to_file(path: str, content: str) -> Dict[str, Any]:
     )
 
 
-async def write_csv(path: str, headers: List[str], rows: List[List[str]]) -> Dict[str, Any]:
+async def write_csv(
+    path: str, headers: List[str], rows: List[List[str]]
+) -> Dict[str, Any]:
     """Writes data to a CSV file. Requires approval."""
-    return await _confirm_and_run("write_csv", _fs.write_csv, path=path, headers=headers, rows=rows)
+    return await _confirm_and_run(
+        "write_csv", _fs.write_csv, path=path, headers=headers, rows=rows
+    )
 
 
 async def copy_file(src: str, dst: str) -> Dict[str, Any]:
@@ -66,7 +75,9 @@ async def move_files(operations: List[Dict[str, str]]) -> Dict[str, Any]:
     return await _confirm_and_run("move_files", _fs.move_files, operations=operations)
 
 
-async def create_directory_and_move(directory: str, src_paths: List[str]) -> Dict[str, Any]:
+async def create_directory_and_move(
+    directory: str, src_paths: List[str]
+) -> Dict[str, Any]:
     """Creates a directory then moves all given paths into it. Requires approval."""
     return await _confirm_and_run(
         "create_directory_and_move",
@@ -88,7 +99,9 @@ async def create_directory(path: str) -> Dict[str, Any]:
 
 async def upload_file(element_id: str, path: str) -> Dict[str, Any]:
     """Clicks an upload button and selects the file at path via the file dialog. Requires approval."""
-    return await _confirm_and_run("upload_file", _fs.upload_file, element_id=element_id, path=path)
+    return await _confirm_and_run(
+        "upload_file", _fs.upload_file, element_id=element_id, path=path
+    )
 
 
 async def request_human(
@@ -111,7 +124,9 @@ async def request_human(
         }
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
-        _toast_pool, run_toast_ui, "help",
+        _toast_pool,
+        run_toast_ui,
+        "help",
         {"tool": "request_human", "description": description, "context": ctx},
     )
     if result.get("status") == "completed":
