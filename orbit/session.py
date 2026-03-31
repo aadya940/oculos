@@ -1,11 +1,13 @@
 """Session owns the OculOS daemon and shared ADK session state."""
 
+import asyncio
 import logging
 from typing import Optional
 
 from google.adk.sessions import InMemorySessionService
 
 from .daemon import OculOSManager
+from ._ui.toast import run_toast_ui
 
 log = logging.getLogger("orbit.session")
 
@@ -37,6 +39,23 @@ class Session:
     async def __aexit__(self, *exc):
         self._daemon.stop()
         self._started = False
+        # Show a completion toast only when the session exits cleanly after running tasks.
+        if exc and exc[0] is None and self._adk_session is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None,
+                    run_toast_ui,
+                    "completion",
+                    {
+                        "description": (
+                            "Orbit has finished all tasks. "
+                            "You can use your screen now."
+                        )
+                    },
+                )
+            except Exception:
+                log.debug("Completion toast failed; continuing shutdown.", exc_info=True)
 
     @property
     def started(self) -> bool:
