@@ -179,7 +179,7 @@ asyncio.run(main())
 
 ## Support matrix
 
-Pre-built wheels on PyPI cover the combinations below (each Python version has its own wheel file). Install with **`pip install orbit-cua`**; **`import orbit`** in code.
+Pre-built wheels on PyPI cover the combinations below.
 
 | OS | Architectures | Notes |
 | ---- | ------------- | ----- |
@@ -190,10 +190,8 @@ Pre-built wheels on PyPI cover the combinations below (each Python version has i
 | | Supported |
 | -- | -- |
 | **Python** | 3.10 · 3.11 · 3.12 · 3.13 |
-| **Interactive desktop** | Required for UI automation (not a headless-server stack) |
 
 **Not published yet (install from source or wait for a future release):** Linux **aarch64**, **musl** / Alpine, 32-bit, and other niche targets.
-
 
 Install from PyPI:
 
