@@ -5,7 +5,6 @@ import os
 import time
 from dataclasses import dataclass
 
-import pyautogui
 import base64
 from io import BytesIO
 
@@ -16,6 +15,22 @@ from typing import Optional, Any, Dict, List
 from .._oculus_client import OculOS
 
 oculos_client = OculOS()
+
+try:
+    import pyautogui
+
+    _PYAUTOGUI_IMPORT_ERROR: Optional[Exception] = None
+except Exception as e:  # pragma: no cover - environment-dependent (e.g. headless CI)
+    pyautogui = None
+    _PYAUTOGUI_IMPORT_ERROR = e
+
+
+def _require_pyautogui() -> None:
+    if pyautogui is None:
+        raise RuntimeError(
+            "pyautogui is unavailable in this environment "
+            f"(import error: {_PYAUTOGUI_IMPORT_ERROR!r})"
+        )
 
 #
 # Speed: tiny TTL cache for discovery calls
@@ -925,6 +940,7 @@ async def take_screenshot(tool_context: ToolContext) -> Dict[str, Any]:
     (find_ui_elements / get_window_tree / interact_with_element) to act.
     """
     try:
+        _require_pyautogui()
         screenshot = pyautogui.screenshot()
         screenshot = screenshot.resize((768, 768))
         buffer = BytesIO()
@@ -951,6 +967,7 @@ def scroll_page(direction: str, amount: int = 3) -> Dict[str, Any]:
         amount (int): Number of scroll steps. Default 3.
     """
     try:
+        _require_pyautogui()
         if direction == "down":
             pyautogui.scroll(-amount * 100)
         elif direction == "up":

@@ -1,5 +1,12 @@
-import pyautogui
 from typing import Dict, Any
+
+try:
+    import pyautogui
+
+    _PYAUTOGUI_IMPORT_ERROR = None
+except Exception as e:  # pragma: no cover - environment-dependent (e.g. headless CI)
+    pyautogui = None
+    _PYAUTOGUI_IMPORT_ERROR = e
 
 
 def press_hotkey(keys: str) -> Dict[str, Any]:
@@ -12,6 +19,11 @@ def press_hotkey(keys: str) -> Dict[str, Any]:
                     'ctrl+shift+t', 'win+d', 'alt+f4'
     """
     try:
+        if pyautogui is None:
+            raise RuntimeError(
+                "pyautogui is unavailable in this environment "
+                f"(import error: {_PYAUTOGUI_IMPORT_ERROR!r})"
+            )
         parts = keys.lower().split("+")
         pyautogui.hotkey(*parts)
         return {"status": "success", "message": f"Pressed {keys}."}
