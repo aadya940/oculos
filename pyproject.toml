@@ -26,8 +26,8 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
-    "google-adk>=1.25.0",
-    "google-genai>=1.64.0",
+    "google-adk==1.25.0",
+    "google-genai==1.64.0",
     "python-dotenv>=1.0.1",
     "pyautogui>=0.9.54",
     "pyperclip>=1.11.0",
