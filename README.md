@@ -25,8 +25,17 @@ copy oculos\target\release\oculos.exe orbit\_bin\oculos.exe
 pip install .
 ```
 
+Set your API key for whichever provider you use. Orbit supports any model via [LiteLLM](https://docs.litellm.ai/):
+
 ```bash
-export GEMINI_API_KEY="your-key-here"
+# Gemini
+export GEMINI_API_KEY="your-key"
+
+# OpenAI
+export OPENAI_API_KEY="your-key"
+
+# Anthropic
+export ANTHROPIC_API_KEY="your-key"
 ```
 
 > `pip install orbit-agent` coming soon.
