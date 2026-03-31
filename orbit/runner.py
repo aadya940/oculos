@@ -126,10 +126,12 @@ class Agent:
         max_steps: int = 30,
         session: Optional[Any] = None,
         output_schema: Optional[Any] = None,
+        extra_info: Optional[str] = None,
         extra_tools: Optional[list] = None,
         human_in_the_loop: Optional[HumanInTheLoopHandler] = None,
     ):
         self.task = task
+        self.extra_info = extra_info.strip() if isinstance(extra_info, str) else None
         self.llm = llm
         self.desktop_llm = desktop_llm
         self.planner_llm = planner_llm
@@ -183,7 +185,7 @@ class Agent:
     # ── Core orchestration ────────────────────────────────────────
 
     async def _run(self) -> RunResult:
-        prompt = self.task
+        prompt = self._compose_prompt(self.task, self.extra_info)
         self._ui = OrbitConsole(verbose=self.verbose)
         self._ui.task_start(prompt)
 
@@ -342,6 +344,17 @@ class Agent:
             errors=self._errors,
             latency=latency_summary,
             journal=self._journal.to_dict(),
+        )
+
+    @staticmethod
+    def _compose_prompt(task: str, extra_info: Optional[str]) -> str:
+        """Build the ADK user prompt from task plus optional advisory hints."""
+        base_task = (task or "").strip()
+        if not extra_info:
+            return base_task
+        return (
+            f"PRIMARY_TASK:\n{base_task}\n\n"
+            f"EXTRA_INFO (advisory context):\n{extra_info}"
         )
 
     # ── Event dispatch ────────────────────────────────────────────

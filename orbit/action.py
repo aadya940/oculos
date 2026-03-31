@@ -37,6 +37,7 @@ class BaseActionAgent(ABC):
         llm: str = "gemini-3-pro-preview",
         max_steps: int = 30,
         verbose: bool = False,
+        extra_info: Optional[str] = None,
         extra_tools: Optional[list] = None,
         **kwargs,
     ):
@@ -45,6 +46,7 @@ class BaseActionAgent(ABC):
         self._llm = llm
         self._max_steps = max_steps
         self._verbose = verbose
+        self._extra_info = extra_info
         self._extra_tools = extra_tools or []
         self._kwargs = kwargs
 
@@ -66,6 +68,7 @@ class BaseActionAgent(ABC):
             verbose=self._verbose,
             session=self._session,
             output_schema=self.output_schema(),
+            extra_info=self._extra_info,
             extra_tools=self._extra_tools,
             **self._kwargs,
         )
