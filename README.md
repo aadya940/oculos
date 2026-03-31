@@ -218,3 +218,8 @@ Orbit never permanently deletes files , destructive operations go to Trash/Recyc
 Apache License 2.0
 </content>
 </invoke>
+
+### Special Thanks to 
+
+[OculOS](https://github.com/huseyinstif/oculos)
+and other open-source packages used ...
