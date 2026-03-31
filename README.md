@@ -42,17 +42,58 @@ class Product(BaseModel):
     in_stock: bool
 
 async def main():
-    async with session() as s:
-        await Navigate("amazon.com", session=s).run()
-        await Do("search for 'mechanical keyboard'", session=s).run()
+    # Use lighter models for routine actions and a stronger one for extraction.
+    action_model = "gemini-3.1-flash-lite-preview"
+    extract_model = "gemini-3-pro-preview"
 
-        products = await Read("the search results", schema=Product, session=s).run()
+    async with session() as s:
+        await Navigate(
+            "amazon.com",
+            session=s,
+            llm=action_model,
+            max_steps=30,
+            verbose=True,
+        ).run()
+        await Do(
+            "search for 'mechanical keyboard'",
+            session=s,
+            llm=action_model,
+            max_steps=30,
+            verbose=True,
+        ).run()
+
+        products = await Read(
+            "the search results",
+            schema=Product,
+            session=s,
+            llm=extract_model,
+            max_steps=30,
+            verbose=True,
+        ).run()
 
         cheapest = min(products.output, key=lambda p: p.price)
-        await Do(f"click on '{cheapest.name}'", session=s).run()
+        await Do(
+            f"click on '{cheapest.name}'",
+            session=s,
+            llm=action_model,
+            max_steps=30,
+            verbose=True,
+        ).run()
 
-        if await Check("Add to Cart button is visible", session=s).check():
-            await Do("click Add to Cart", session=s).run()
+        if await Check(
+            "Add to Cart button is visible",
+            session=s,
+            llm=action_model,
+            max_steps=30,
+            verbose=True,
+        ).check():
+            await Do(
+                "click Add to Cart",
+                session=s,
+                llm=action_model,
+                max_steps=30,
+                verbose=True,
+            ).run()
 
 asyncio.run(main())
 ```
