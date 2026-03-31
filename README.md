@@ -121,6 +121,63 @@ async def main():
 asyncio.run(main())
 ```
 
+## Implementing Custom Verb 
+
+You can create reusable domain-specific actions by subclassing `BaseActionAgent` and 
+defining both the task prompt and output schema.
+
+```python
+from orbit import BaseActionAgent, Navigate, session
+from pydantic import BaseModel
+import asyncio
+
+
+class Product(BaseModel):
+    name: str
+    price: float
+    in_stock: bool
+
+
+class ProductList(BaseModel):
+    products: list[Product]
+
+
+class ReadTopProducts(BaseActionAgent):
+    def __init__(self, category: str, **kw):
+        super().__init__(max_steps=12, planner=False, **kw)
+        self.category = category
+
+    def task_prompt(self) -> str:
+        return (
+            f"OBSERVE: Read top products for category '{self.category}' from the current page.\n"
+            "Extract product name, price, and stock status only. "
+            "Do not click or navigate."
+        )
+
+    def output_schema(self):
+        return ProductList
+
+
+async def main():
+    async with session() as s:
+        await Navigate("https://www.amazon.com/s?k=mechanical+keyboard", session=s).run()
+
+        result = await ReadTopProducts(
+            category="mechanical keyboard",
+            session=s,
+            llm="gemini-3-flash-preview",
+            verbose=True,
+            planner=False,
+            extra_info="Only include visible, on-page product cards.",
+        ).run()
+
+        print(result.status)
+        if result.output:
+            print(result.output.products[:3])
+
+asyncio.run(main())
+```
+
 ## Installation
 
 ```bash
@@ -137,6 +194,8 @@ copy oculos\target\release\oculos.exe orbit\_bin\oculos.exe
 
 pip install .
 ```
+
+macOS users might need to grant additional permissions for UI Interaction as defined [here](https://github.com/huseyinstif/oculos?tab=readme-ov-file#macos-grant-accessibility-permission).
 
 Set your API key for whichever provider you use. Orbit supports any model via [LiteLLM](https://docs.litellm.ai/):
 
