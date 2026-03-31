@@ -1,5 +1,5 @@
 <p>
-<img src="logo.png" align="center">
+<img src = "logo.png" align="center">
 </p>
 
 Orbit is a composable toolkit for building Computer Use Agents (CUAs). It provides both a standalone multi-step agent and a composable SDK.
@@ -31,7 +31,7 @@ asyncio.run(main())
 
 ## Composable SDK
 
-For multi-step workflows, use verbs with a shared session:
+For more controlled workflows, use verbs with a shared session in a pythonic way:
 
 ```python
 from orbit import Do, Read, Check, Navigate, Fill, session
@@ -124,7 +124,7 @@ asyncio.run(main())
 ## Installation
 
 ```bash
-git clone --recurse-submodules https://github.com/AadyaOrbit/orbit.git
+git clone --recurse-submodules https://github.com/aadya940/orbit.git
 cd orbit
 
 # Build the OculOS daemon (requires Rust)
@@ -159,6 +159,6 @@ Orbit never permanently deletes files , destructive operations go to Trash/Recyc
 
 ## License
 
-MIT
+Apache License 2.0
 </content>
 </invoke>
