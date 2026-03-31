@@ -194,16 +194,21 @@ class Agent:
         if self._session and hasattr(self._session, "session_service"):
             session_service = self._session.session_service
             if self._session.adk_session is not None:
-                session = self._session.adk_session
-                # Reset budget for this verb's run.
-                session.state["_orbit_max_calls"] = self.max_steps
-                session.state["_orbit_call_count"] = 0
+                cached = self._session.adk_session
+                session = await session_service.get_session(
+                    app_name="desktop_app",
+                    user_id="local_admin",
+                    session_id=cached.id,
+                )
+                if session is None:
+                    session = cached
+                self._session.adk_session = session
             else:
                 session = await session_service.create_session(
                     app_name="desktop_app",
                     user_id="local_admin",
                     session_id="session_001",
-                    state={"_orbit_max_calls": self.max_steps},
+                    state={},
                 )
                 self._session.adk_session = session
         else:
@@ -212,7 +217,7 @@ class Agent:
                 app_name="desktop_app",
                 user_id="local_admin",
                 session_id="session_001",
-                state={"_orbit_max_calls": self.max_steps},
+                state={},
             )
 
         self._journal = Journal(core_key="desktop_attempt_0")
@@ -231,6 +236,9 @@ class Agent:
             build_kwargs["extra_tools"] = self._extra_tools
         if self._output_schema is not None:
             build_kwargs["output_schema"] = self._output_schema
+        self._budget_counter = {"call_count": 0}
+        build_kwargs["max_calls"] = self.max_steps
+        build_kwargs["budget_counter"] = self._budget_counter
 
         parent_agent, _desktop_agent = build_agents(**build_kwargs)
 
@@ -273,14 +281,7 @@ class Agent:
             status = "success"
 
         latency_summary = self._latency.summary() if self._latency else {}
-        updated_session = await session_service.get_session(
-            app_name="desktop_app",
-            user_id="local_admin",
-            session_id=session.id,
-        )
-        llm_calls_used = (
-            updated_session.state if updated_session else session.state
-        ).get("_orbit_call_count", 0)
+        llm_calls_used = int(self._budget_counter.get("call_count", 0))
         latency_summary["llm_calls"] = llm_calls_used
         latency_summary["max_llm_calls"] = self.max_steps
         if self._latency:

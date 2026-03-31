@@ -100,79 +100,95 @@ def make_lite_llm(model: str):
 _BUDGET_WARNING_THRESHOLD = 5  # Warn when this many calls remain.
 
 
-async def inject_screenshot_callback(
-    callback_context: CallbackContext, llm_request: LlmRequest
-) -> Optional[LlmResponse]:
-    """
-    Before each desktop agent LLM call:
-    1. Track call count; hard-stop when budget exhausted, warn when running low.
-    2. Inject screenshot artifacts as inline images.
-    """
-    # ── Budget tracking ────────────────────────────────────────────
-    call_num = callback_context.state.get("_orbit_call_count", 0) + 1
-    callback_context.state["_orbit_call_count"] = call_num
-    max_calls = callback_context.state.get("_orbit_max_calls", 30)
-    remaining = max(0, max_calls - call_num)
-
-    # Hard-stop: return a canned response so the LLM is never called.
-    if remaining <= 0:
-        log.warning(
-            "Budget exhausted (%d/%d calls). Forcing stop.", call_num, max_calls
-        )
-        return LlmResponse(
-            content=types.Content(
-                role="model",
-                parts=[
-                    types.Part(
-                        text="[BUDGET EXHAUSTED] Stopping — no LLM calls remaining."
-                    )
-                ],
+def make_inject_screenshot_callback(
+    *, max_calls: int, budget_counter: Optional[dict[str, int]] = None
+):
+    async def _inject_screenshot_callback(
+        callback_context: CallbackContext, llm_request: LlmRequest
+    ) -> Optional[LlmResponse]:
+        """
+        Before each desktop agent LLM call:
+        1. Track call count; hard-stop when budget exhausted, warn when running low.
+        2. Inject screenshot artifacts as inline images.
+        """
+        # ── Budget tracking ────────────────────────────────────────────
+        # Keep this per-run using a closure-backed counter. This avoids relying on
+        # direct Session.state mutations outside callback/tool context.
+        if budget_counter is None:
+            call_num = (
+                int(callback_context.state.get("temp:orbit_call_count", 0) or 0) + 1
             )
-        )
-
-    if remaining <= _BUDGET_WARNING_THRESHOLD and llm_request.contents:
-        llm_request.contents.append(
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part(
-                        text=f"[BUDGET] {remaining} LLM calls remaining. "
-                        "Finish the current step now and return."
-                    )
-                ],
+            callback_context.state["temp:orbit_call_count"] = call_num
+        else:
+            budget_counter["call_count"] = (
+                int(budget_counter.get("call_count", 0) or 0) + 1
             )
-        )
+            call_num = budget_counter["call_count"]
+            callback_context.state["temp:orbit_call_count"] = call_num
 
-    if not llm_request.contents:
-        return None
-    content = llm_request.contents[-1]
-    if not content.parts:
-        return None
-    for part in content.parts:
-        if (
-            hasattr(part, "function_response")
-            and part.function_response
-            and part.function_response.name == "take_screenshot"
-        ):
-            response = part.function_response.response
-            if response.get("status") == "success":
-                artifact = await callback_context.load_artifact("screenshot.jpg")
-                if artifact and artifact.inline_data:
-                    llm_request.contents.append(
-                        types.Content(
-                            role="user",
-                            parts=[
-                                types.Part(
-                                    inline_data=types.Blob(
-                                        mime_type="image/jpeg",
-                                        data=artifact.inline_data.data,
-                                    )
-                                ),
-                                types.Part(text="This is the current screenshot."),
-                            ],
+        remaining = max(0, int(max_calls) - call_num)
+
+        # Hard-stop: return a canned response so the LLM is never called.
+        if remaining <= 0:
+            log.warning(
+                "Budget exhausted (%d/%d calls). Forcing stop.", call_num, max_calls
+            )
+            return LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            text="[BUDGET EXHAUSTED] Stopping — no LLM calls remaining."
                         )
-                    )
-    return None
+                    ],
+                )
+            )
+
+        if remaining <= _BUDGET_WARNING_THRESHOLD and llm_request.contents:
+            llm_request.contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part(
+                            text=f"[BUDGET] {remaining} LLM calls remaining. "
+                            "Finish the current step now and return."
+                        )
+                    ],
+                )
+            )
+
+        if not llm_request.contents:
+            return None
+        content = llm_request.contents[-1]
+        if not content.parts:
+            return None
+        for part in content.parts:
+            if (
+                hasattr(part, "function_response")
+                and part.function_response
+                and part.function_response.name == "take_screenshot"
+            ):
+                response = part.function_response.response
+                if response.get("status") == "success":
+                    artifact = await callback_context.load_artifact("screenshot.jpg")
+                    if artifact and artifact.inline_data:
+                        llm_request.contents.append(
+                            types.Content(
+                                role="user",
+                                parts=[
+                                    types.Part(
+                                        inline_data=types.Blob(
+                                            mime_type="image/jpeg",
+                                            data=artifact.inline_data.data,
+                                        )
+                                    ),
+                                    types.Part(text="This is the current screenshot."),
+                                ],
+                            )
+                        )
+        return None
+
+    return _inject_screenshot_callback
 
 
 def capture_phase_instruction_before_agent_callback(
@@ -199,7 +215,10 @@ def parent_prompt_provider(context: ReadonlyContext) -> str:
 
 
 def build_desktop_agent(
-    desktop_model: str, extra_tools: Optional[list] = None
+    desktop_model: str,
+    extra_tools: Optional[list] = None,
+    max_calls: int = 30,
+    budget_counter: Optional[dict[str, int]] = None,
 ) -> Agent:
     return Agent(
         model=make_lite_llm(desktop_model),
@@ -209,7 +228,10 @@ def build_desktop_agent(
         Delegate any phase that requires interacting with the screen or apps to this agent.
         This agent is responsible for all the desktop UI automation tasks.""",
         instruction=system_prompt_provider,
-        before_model_callback=inject_screenshot_callback,
+        before_model_callback=make_inject_screenshot_callback(
+            max_calls=max_calls,
+            budget_counter=budget_counter,
+        ),
         before_agent_callback=capture_phase_instruction_before_agent_callback,
         tools=[
             list_active_windows,
@@ -285,9 +307,16 @@ def build_agents(
     planner_model: str = DEFAULT_PLANNER_MODEL,
     extra_tools: Optional[list] = None,
     output_schema: Optional[type] = None,
+    max_calls: int = 30,
+    budget_counter: Optional[dict[str, int]] = None,
 ) -> tuple[Agent, Agent]:
     """Return (parent_agent, desktop_agent) for the requested model strings."""
-    desktop_agent = build_desktop_agent(desktop_model, extra_tools=extra_tools)
+    desktop_agent = build_desktop_agent(
+        desktop_model,
+        extra_tools=extra_tools,
+        max_calls=max_calls,
+        budget_counter=budget_counter,
+    )
     parent_agent = build_parent_agent(
         planner_model, desktop_agent, output_schema=output_schema
     )
