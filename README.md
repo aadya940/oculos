@@ -2,32 +2,9 @@
 <img src = "logo.png" align="center">
 </p>
 
-Orbit is a composable toolkit for building Computer Use Agents (CUAs). It provides both a standalone multi-step agent and a composable SDK.
+Orbit is a composable toolkit for building Computer Use Agents (CUAs) focused on providing structure and control. It provides both a standalone multi-step agent and a composable SDK.
 
-Most CUA frameworks either automate the complete task as a black box or expose raw tools with no structure. Orbit sits in between , natural language controls the screen, Python controls the flow. Each primitive (`Do`, `Read`, `Check`, `Navigate`, `Fill`) is an independent agent with its own budget, model, and typed output, but they share context within a session. This means you can use a lightweight model for simple clicks and a heavier model for complex tasks, control max LLM calls per step, and extract structured data from the screen into Pydantic models. Also, if you realise the agent is struggling at a particular step, you can pass in some extra guidance through the `extra_info` kwarg, this lets you control the stepwise information flow. We also let you use `planner=False` for lower-latency direct execution on simple steps, or keep the default `planner=True` for decomposing on complex tasks to multiple simpler tasks.
-
-
-Orbit uses the OS accessibility tree instead of screenshots or DOM parsing, which means less token usage and direct access to UI elements across both desktop apps and browsers.
-
-## Standalone Agent
-
-For one-shot tasks, just describe what you want:
-
-```python
-from orbit import Agent
-import asyncio
-
-async def main():
-    result = await Agent(
-        task="Open Chrome and navigate to Wikipedia",
-        llm="gemini-3-pro-preview",
-        planner=False,  
-        verbose=True,
-    ).run()
-    print(result.status, result.summary)
-
-asyncio.run(main())
-```
+Most CUA frameworks either automate the complete task as a black box or expose raw tools with no structure. Orbit sits in between , natural language controls the screen, Python controls the flow. Each primitive (`Do`, `Read`, `Check`, `Navigate`, `Fill`) is an independent agent with its own budget, model, and typed output, but they share context within a session. This means you can use a lightweight model for simple clicks and a heavier model for complex tasks, control max LLM calls per step, and extract structured data from the screen into Pydantic models. Also, if you realise the agent is struggling at a particular step, you can pass in some extra guidance through the `extra_info` kwarg, this lets you control the stepwise information flow. We also let you use `planner=False` for lower-latency direct execution on simple steps, or keep the default `planner=True` for decomposing on complex tasks to multiple simpler tasks. Orbit uses the OS accessibility tree instead of screenshots or DOM parsing, which means a bit less token usage and direct access to UI elements across both desktop apps and browsers.
 
 ## Composable SDK
 
@@ -117,6 +94,26 @@ async def main():
                 max_steps=30,
                 verbose=True,
             ).run()
+
+asyncio.run(main())
+```
+
+## Standalone Agent
+
+For one-shot tasks, just describe what you want:
+
+```python
+from orbit import Agent
+import asyncio
+
+async def main():
+    result = await Agent(
+        task="Open Chrome and navigate to Wikipedia",
+        llm="gemini-3-pro-preview",
+        planner=False,  
+        verbose=True,
+    ).run()
+    print(result.status, result.summary)
 
 asyncio.run(main())
 ```
@@ -226,3 +223,8 @@ Orbit never permanently deletes files , destructive operations go to Trash/Recyc
 ## License
 
 Apache License 2.0
+
+### Special Thanks to 
+
+[OculOS](https://github.com/huseyinstif/oculos)
+and other open-source packages used ...
