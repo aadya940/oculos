@@ -1,5 +1,5 @@
 <p>
-<img src="logo.png" align="center">
+<img src = "logo.png" align="center">
 </p>
 
 Orbit is a composable toolkit for building Computer Use Agents (CUAs). It provides both a standalone multi-step agent and a composable SDK.
