@@ -177,22 +177,6 @@ asyncio.run(main())
 
 ## Installation
 
-## Support matrix
-
-Pre-built wheels on PyPI cover the combinations below.
-
-| OS | Architectures | Notes |
-| ---- | ------------- | ----- |
-| **Windows** | 64-bit (`win_amd64`) | — |
-| **Linux** | x86-64 (`manylinux`) | glibc-based manylinux tags (see filenames on PyPI) |
-| **macOS** | Intel + Apple Silicon (`universal2`) | Single wheel per Python version |
-
-| | Supported |
-| -- | -- |
-| **Python** | 3.10 · 3.11 · 3.12 · 3.13 |
-
-**Not published yet (install from source or wait for a future release):** Linux **aarch64**, **musl** / Alpine, 32-bit, and other niche targets.
-
 Install from PyPI:
 
 ```bash
@@ -230,6 +214,23 @@ export OPENAI_API_KEY="your-key"
 # Anthropic
 export ANTHROPIC_API_KEY="your-key"
 ```
+
+## Support matrix
+
+Pre-built wheels on PyPI cover the combinations below.
+
+| OS | Architectures | Notes |
+| ---- | ------------- | ----- |
+| **Windows** | 64-bit (`win_amd64`) | — |
+| **Linux** | x86-64 (`manylinux`) | glibc-based manylinux tags (see filenames on PyPI) |
+| **macOS** | Intel + Apple Silicon (`universal2`) | Single wheel per Python version |
+
+| | Supported |
+| -- | -- |
+| **Python** | 3.10 · 3.11 · 3.12 · 3.13 |
+
+**Not published yet (install from source or wait for a future release):** Linux **aarch64**, **musl** / Alpine, 32-bit, and other niche targets.
+
 
 
 ## Safety
