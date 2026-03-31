@@ -60,7 +60,7 @@ asyncio.run(main())
 ## Installation
 
 ```bash
-git clone --recurse-submodules https://github.com/AadyaOrbit/orbit.git
+git clone --recurse-submodules https://github.com/aadya940/orbit.git
 cd orbit
 
 # Build the OculOS daemon (requires Rust)
