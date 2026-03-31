@@ -285,6 +285,7 @@ def build_parent_agent(
     planner_model: str,
     desktop_agent: Agent,
     output_schema: Optional[type] = None,
+    output_key: Optional[str] = None,
 ) -> Agent:
     desktop_tool = AgentTool(desktop_agent)
     kwargs: dict[str, Any] = dict(
@@ -298,6 +299,8 @@ def build_parent_agent(
     )
     if output_schema is not None:
         kwargs["output_schema"] = output_schema
+    if output_key is not None:
+        kwargs["output_key"] = output_key
     return Agent(**kwargs)
 
 
@@ -309,6 +312,7 @@ def build_agents(
     output_schema: Optional[type] = None,
     max_calls: int = 30,
     budget_counter: Optional[dict[str, int]] = None,
+    output_key: Optional[str] = None,
 ) -> tuple[Agent, Agent]:
     """Return (parent_agent, desktop_agent) for the requested model strings."""
     desktop_agent = build_desktop_agent(
@@ -318,6 +322,9 @@ def build_agents(
         budget_counter=budget_counter,
     )
     parent_agent = build_parent_agent(
-        planner_model, desktop_agent, output_schema=output_schema
+        planner_model,
+        desktop_agent,
+        output_schema=output_schema,
+        output_key=output_key,
     )
     return parent_agent, desktop_agent
