@@ -136,6 +136,6 @@ Orbit never permanently deletes files , destructive operations go to Trash/Recyc
 
 ## License
 
-MIT
+Apache License 2.0
 </content>
 </invoke>
