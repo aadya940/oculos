@@ -1,6 +1,8 @@
 """Minimal Agent interface: Agent(llm=..., task=...)."""
 
+import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -187,6 +189,7 @@ class Agent:
 
         # Run state.
         self._final_text = ""
+        self._final_output: Any = None
         self._errors: list[str] = []
         self._saw_request_human = False
 
@@ -235,7 +238,13 @@ class Agent:
         if self._extra_tools:
             build_kwargs["extra_tools"] = self._extra_tools
         if self._output_schema is not None:
+            # ADK-native structured output path:
+            # - ADK validates the model reply against output_schema
+            # - ADK stores the validated JSON string into session.state[output_key]
+            output_key = f"orbit_output_{int(time.time() * 1000)}"
+            self._output_schema_output_key = output_key
             build_kwargs["output_schema"] = self._output_schema
+            build_kwargs["output_key"] = output_key
         self._budget_counter = {"call_count": 0}
         build_kwargs["max_calls"] = self.max_steps
         build_kwargs["budget_counter"] = self._budget_counter
@@ -280,6 +289,63 @@ class Agent:
         else:
             status = "success"
 
+        if self._output_schema is not None and status == "success":
+            # ADK-native structured output path:
+            # - output_schema validates the model's reply
+            # - output_key stores the validated JSON string in session.state
+            output_key = self._output_schema_output_key
+            try:
+                updated_session = await session_service.get_session(
+                    app_name="desktop_app",
+                    user_id="local_admin",
+                    session_id=session.id,
+                )
+                state = (
+                    updated_session.state if updated_session else session.state
+                ) or {}
+                json_text = state.get(output_key)
+                if json_text is None:
+                    raise KeyError(
+                        f"Missing ADK output_key={output_key!r} in session.state"
+                    )
+                model_validate_json = getattr(
+                    self._output_schema, "model_validate_json", None
+                )
+                if callable(model_validate_json):
+                    self._final_output = self._output_schema.model_validate_json(
+                        json_text
+                    )
+                else:
+                    data = json.loads(json_text)
+                    self._final_output = self._output_schema.model_validate(data)
+            except Exception as e:
+                # Fallback: parse from the final response text if output_key is missing.
+                # Keep strict validation semantics: if validation fails, mark run failed.
+                try:
+                    payload = self._extract_json_payload(self._final_text)
+                    if payload is None:
+                        raise ValueError(
+                            "Final response text is not valid JSON payload"
+                        )
+                    model_validate_json = getattr(
+                        self._output_schema, "model_validate_json", None
+                    )
+                    if callable(model_validate_json):
+                        self._final_output = self._output_schema.model_validate_json(
+                            payload
+                        )
+                    else:
+                        data = json.loads(payload)
+                        self._final_output = self._output_schema.model_validate(data)
+                except Exception as e2:
+                    status = "failed"
+                    self._errors.append(
+                        f"structured_output_decode_failed: state={e}; text={e2}"
+                    )
+                    self._final_output = None
+        else:
+            self._final_output = self._final_text
+
         latency_summary = self._latency.summary() if self._latency else {}
         llm_calls_used = int(self._budget_counter.get("call_count", 0))
         latency_summary["llm_calls"] = llm_calls_used
@@ -290,7 +356,7 @@ class Agent:
         return RunResult(
             status=status,
             summary=self._final_text,
-            output=self._final_text,
+            output=self._final_output,
             errors=self._errors,
             latency=latency_summary,
             journal=self._journal.to_dict(),
@@ -336,6 +402,93 @@ class Agent:
         else:
             self._final_text = _console_safe(text) if text else ""
             self._ui.agent_done(self._final_text)
+
+    def _decode_structured_output(self, text: str) -> Any:
+        """Best-effort decode of ADK final text into schema-typed output."""
+        schema = self._output_schema
+        if not schema:
+            return text
+
+        payload = self._extract_json_payload(text)
+        if payload is None:
+            return text
+
+        try:
+            data = json.loads(payload)
+        except Exception:
+            return text
+
+        validate = getattr(schema, "model_validate", None)
+        if callable(validate):
+            try:
+                if isinstance(data, list):
+                    return [schema.model_validate(item) for item in data]
+                if isinstance(data, dict):
+                    try:
+                        return schema.model_validate(data)
+                    except Exception:
+                        coerced = self._coerce_dict_for_schema(schema, data)
+                        if coerced is not None:
+                            return schema.model_validate(coerced)
+                        raise
+            except Exception:
+                return data
+        return data
+
+    @staticmethod
+    def _coerce_dict_for_schema(schema: Any, data: dict) -> Optional[dict]:
+        """
+        Heuristics to coerce common LLM JSON shapes into the schema shape.
+
+        Common failure patterns:
+        - Model returns {"items": [...]} but schema expects {"products": [...]}
+        - Model returns {"products": {"items": [...]}} but schema expects {"products": [...]}
+        """
+        model_fields = getattr(schema, "model_fields", None)
+        if not isinstance(model_fields, dict):
+            return None
+
+        out = dict(data)
+
+        # 1) Unwrap nested {"field": {"items": [...]}} -> {"field": [...]}
+        for fname in list(model_fields.keys()):
+            v = out.get(fname)
+            if isinstance(v, dict) and isinstance(v.get("items"), list):
+                out[fname] = v["items"]
+
+        # 2) If schema has exactly one field and payload is {"items": [...]}, map it.
+        if (
+            "items" in out
+            and isinstance(out.get("items"), list)
+            and len(model_fields) == 1
+        ):
+            only_field = next(iter(model_fields.keys()))
+            if only_field not in out:
+                out[only_field] = out["items"]
+
+        # 3) Common alias mapping (items/results -> products)
+        if "products" in model_fields and "products" not in out:
+            for k in ("items", "results", "data"):
+                if k in out and isinstance(out.get(k), list):
+                    out["products"] = out[k]
+                    break
+
+        return out
+
+    @staticmethod
+    def _extract_json_payload(text: str) -> Optional[str]:
+        if not text:
+            return None
+        s = text.strip()
+        if s.startswith("```"):
+            m = re.match(r"^```(?:json)?\s*(.*?)\s*```$", s, flags=re.DOTALL)
+            if m:
+                s = m.group(1).strip()
+        if (s.startswith("{") and s.endswith("}")) or (
+            s.startswith("[") and s.endswith("]")
+        ):
+            return s
+        return None
 
     def _on_function_call(self, event, part) -> None:
         name = part.function_call.name

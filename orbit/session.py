@@ -55,7 +55,9 @@ class Session:
                     },
                 )
             except Exception:
-                log.debug("Completion toast failed; continuing shutdown.", exc_info=True)
+                log.debug(
+                    "Completion toast failed; continuing shutdown.", exc_info=True
+                )
 
     @property
     def started(self) -> bool:

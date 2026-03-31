@@ -41,6 +41,9 @@ class Product(BaseModel):
     price: float
     in_stock: bool
 
+class ProductList(BaseModel):
+    products: list[Product]
+
 async def main():
     # Use lighter models plus stronger model
     extract_model = "gemini-3.1-flash-lite-preview"
@@ -64,14 +67,14 @@ async def main():
 
         products = await Read(
             "the search results",
-            schema=Product,
+            schema=ProductList,
             session=s,
             llm=extract_model,
             max_steps=30,
             verbose=True,
         ).run()
 
-        cheapest = min(products.output, key=lambda p: p.price)
+        cheapest = min(products.output.products, key=lambda p: p.price)
         await Do(
             f"click on '{cheapest.name}'",
             session=s,
