@@ -54,6 +54,21 @@ jobs:
       - name: Build Orbit wheel only
         run: python -m build --wheel
 
+      # PyPI rejects bare linux_x86_64 / linux_aarch64 tags; require manylinux.
+      - name: Install patchelf (Linux, for auditwheel)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y patchelf
+
+      - name: Repair wheel for PyPI (manylinux)
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install auditwheel
+          mkdir -p dist-repaired
+          auditwheel repair dist/*.whl -w dist-repaired
+          rm -f dist/*.whl
+          mv dist-repaired/* dist/
+          rmdir dist-repaired
+
       - name: Verify wheel is platform-specific (not none-any)
         shell: bash
         run: |
