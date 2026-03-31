@@ -124,6 +124,7 @@ class Agent:
         measure_latency: bool = True,
         verbose: bool = False,
         max_steps: int = 30,
+        planner: bool = True,
         session: Optional[Any] = None,
         output_schema: Optional[Any] = None,
         extra_info: Optional[str] = None,
@@ -138,6 +139,7 @@ class Agent:
         self.measure_latency = measure_latency
         self.verbose = verbose
         self.max_steps = max_steps
+        self.planner = bool(planner)
         self._session = session
         self._output_schema = output_schema
         self._extra_tools = extra_tools or []
@@ -237,6 +239,7 @@ class Agent:
             build_kwargs["desktop_model"] = desktop_model
         if planner_model is not None:
             build_kwargs["planner_model"] = planner_model
+        build_kwargs["planner"] = self.planner
         if self._extra_tools:
             build_kwargs["extra_tools"] = self._extra_tools
         if self._output_schema is not None:
@@ -251,11 +254,11 @@ class Agent:
         build_kwargs["max_calls"] = self.max_steps
         build_kwargs["budget_counter"] = self._budget_counter
 
-        parent_agent, _desktop_agent = build_agents(**build_kwargs)
+        root_agent, _desktop_agent = build_agents(**build_kwargs)
 
         app = App(
             name="desktop_app",
-            root_agent=parent_agent,
+            root_agent=root_agent,
             events_compaction_config=EventsCompactionConfig(
                 compaction_interval=3,
                 overlap_size=1,
@@ -392,7 +395,7 @@ class Agent:
         if getattr(event, "content", None) and event.content.parts:
             text = getattr(event.content.parts[0], "text", None)
 
-        if is_desktop:
+        if is_desktop and self.planner:
             self._ui.step_done()
         else:
             self._final_text = _console_safe(text) if text else ""

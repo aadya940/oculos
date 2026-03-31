@@ -96,7 +96,10 @@ def _cached_find_elements(
     return _cache_set(
         key,
         oculos_client.find_elements(
-            int(pid), query=_norm_query(query), element_type=element_type, interactive=interactive
+            int(pid),
+            query=_norm_query(query),
+            element_type=element_type,
+            interactive=interactive,
         ),
     )
 
@@ -121,7 +124,10 @@ def _cached_find_elements_hwnd(
     return _cache_set(
         key,
         oculos_client.find_elements_hwnd(
-            int(hwnd), query=_norm_query(query), element_type=element_type, interactive=interactive
+            int(hwnd),
+            query=_norm_query(query),
+            element_type=element_type,
+            interactive=interactive,
         ),
     )
 
@@ -220,8 +226,10 @@ async def wait_for_element(
                 "polls_done": polls_done,
             }
 
-        if query_lower and query != query_lower and (
-            max_polls is None or polls_done < max_polls
+        if (
+            query_lower
+            and query != query_lower
+            and (max_polls is None or polls_done < max_polls)
         ):
             result = find_ui_elements(
                 pid,
@@ -343,7 +351,11 @@ def find_ui_elements(
         for el in elements:
             eid = el.get("oculos_id")
             if eid:
-                _element_meta[eid] = {"pid": pid, "query": query, "element_type": element_type}
+                _element_meta[eid] = {
+                    "pid": pid,
+                    "query": query,
+                    "element_type": element_type,
+                }
         return {"status": "success", "elements": _slim_elements(elements)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to find elements: {str(e)}"}
@@ -371,12 +383,17 @@ def fill_form_fields(
         dict with "filled" (succeeded), "errors" (failed), and "status".
     """
     if len(field_labels) != len(field_values):
-        return {"status": "error", "message": "field_labels and field_values must be the same length."}
+        return {
+            "status": "error",
+            "message": "field_labels and field_values must be the same length.",
+        }
     filled: Dict[str, str] = {}
     errors: Dict[str, str] = {}
     for label, value in zip(field_labels, field_values):
         try:
-            elements = oculos_client.find_elements(pid, query=str(label), interactive=True)
+            elements = oculos_client.find_elements(
+                pid, query=str(label), interactive=True
+            )
             if not elements:
                 errors[label] = "element not found"
                 continue
@@ -603,7 +620,13 @@ async def interact_with_element(
                 el = fresh[0]
                 parts = [
                     f"{k}={el[k]}"
-                    for k in ("toggle_state", "checked", "value", "is_selected", "is_enabled")
+                    for k in (
+                        "toggle_state",
+                        "checked",
+                        "value",
+                        "is_selected",
+                        "is_enabled",
+                    )
                     if el.get(k) is not None
                 ]
                 return (" | " + ", ".join(parts)) if parts else ""
@@ -615,7 +638,10 @@ async def interact_with_element(
     try:
         _do(element_id)
         _invalidate_discovery_cache()
-        return {"status": "success", "message": f"Performed '{action}' on {element_id}.{_post_state_str(element_id)}"}
+        return {
+            "status": "success",
+            "message": f"Performed '{action}' on {element_id}.{_post_state_str(element_id)}",
+        }
     except Exception as e:
         msg = str(e)
 
@@ -625,7 +651,10 @@ async def interact_with_element(
         try:
             _do(element_id)
             _invalidate_discovery_cache()
-            return {"status": "success", "message": f"Performed '{action}' on {element_id} after COM retry.{_post_state_str(element_id)}"}
+            return {
+                "status": "success",
+                "message": f"Performed '{action}' on {element_id} after COM retry.{_post_state_str(element_id)}",
+            }
         except Exception as e2:
             msg = str(e2)
 
@@ -644,7 +673,10 @@ async def interact_with_element(
                 _element_meta[fresh_id] = meta
                 _do(fresh_id)
                 _invalidate_discovery_cache()
-                return {"status": "success", "message": f"Performed '{action}' after re-finding stale element.{_post_state_str(fresh_id)}"}
+                return {
+                    "status": "success",
+                    "message": f"Performed '{action}' after re-finding stale element.{_post_state_str(fresh_id)}",
+                }
         except Exception as e3:
             msg = str(e3)
 
@@ -673,6 +705,7 @@ def click_first(
         anchor_probe_query: if provided, do a single cheap anchor probe before searching/clicking
         allow_browser_chrome: if True, permit clicks on browser chrome (bookmarks/tabs/address bar).
     """
+
     def _is_browser_chrome_element(el: Dict[str, Any]) -> bool:
         text = " ".join(
             str(el.get(k) or "")
@@ -796,7 +829,9 @@ def type_into(
             ok = str(text).strip() in str(v)
             return {
                 "status": "success" if ok else "warning",
-                "message": "Typed and verified." if ok else "Typed but could not verify value.",
+                "message": (
+                    "Typed and verified." if ok else "Typed but could not verify value."
+                ),
                 "element_id": str(element_id),
                 "observed_value": str(v)[:200],
             }
@@ -814,7 +849,7 @@ def _nav_url_norm(u: str) -> str:
     u = u.strip().lower()
     for prefix in ("https://", "http://"):
         if u.startswith(prefix):
-            u = u[len(prefix):]
+            u = u[len(prefix) :]
     return u.rstrip("/")
 
 
@@ -857,7 +892,10 @@ def navigate_to_url(pid: int, url: str) -> Dict[str, Any]:
         _invalidate_discovery_cache()
 
         status = "navigated" if navigated else "navigation_sent"
-        return {"status": "success", "message": f"Navigated to {url} ({status}) — page is ready."}
+        return {
+            "status": "success",
+            "message": f"Navigated to {url} ({status}) — page is ready.",
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

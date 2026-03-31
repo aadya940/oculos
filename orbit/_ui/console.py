@@ -49,7 +49,9 @@ class OrbitConsole:
     def agent_done(self, summary: str):
         self.step_done()
         if summary:
-            self.console.print(Panel(summary.strip(), title="Done", border_style="green"))
+            self.console.print(
+                Panel(summary.strip(), title="Done", border_style="green")
+            )
 
     def error(self, msg: str):
         self.console.print(f"[bold red]Error:[/bold red] {msg}")
