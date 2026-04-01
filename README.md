@@ -129,7 +129,7 @@ async def main():
 asyncio.run(main())
 ```
 
-## Implementing Custom Verb 
+## Implementing Custom Actions 
 
 You can create reusable domain-specific actions by subclassing `BaseActionAgent` and 
 defining both the task prompt and output schema.
