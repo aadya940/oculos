@@ -2,7 +2,12 @@
 <img src = "logo.png" align="center">
 </p>
 
-[![Watch the video](https://img.youtube.com/vi/nll7Mmzwh00/maxresdefault.jpg)](https://youtu.be/nll7Mmzwh00?si=dJ1bXiowo-oJYo7c)
+<p align="center">
+<strong>▶ Click the preview to play on YouTube</strong><br><br>
+<a href="https://youtu.be/nll7Mmzwh00" title="Play on YouTube">
+<img src="https://img.youtube.com/vi/nll7Mmzwh00/maxresdefault.jpg" alt="Video: Orbit demo on YouTube — click to play" width="720">
+</a>
+</p>
 
 
 Orbit is a composable toolkit for building Computer Use Agents (CUAs) focused on providing structure and control. It provides both a standalone multi-step agent and a composable SDK.
