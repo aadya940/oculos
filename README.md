@@ -11,6 +11,7 @@
 </a>
 </p>
 
+## About
 
 Orbit is a composable toolkit for building Computer Use Agents (CUAs) focused on providing structure and control. It provides both a standalone multi-step agent and a composable SDK.
 
