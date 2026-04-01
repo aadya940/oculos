@@ -2,8 +2,6 @@
 <img src = "logo.png" align="center">
 </p>
 
-- **[Watch demo (MP4)](./orbit_demo_new.mp4)** — opens the file on GitHub (use the **Download** / **View raw** control there to play in the browser).
-- For an **inline** preview in the README, add a short **animated GIF** (e.g. `orbit_demo.gif`) and reference it like the logo: `![Demo](orbit_demo.gif)`.
 
 Orbit is a composable toolkit for building Computer Use Agents (CUAs) focused on providing structure and control. It provides both a standalone multi-step agent and a composable SDK.
 
