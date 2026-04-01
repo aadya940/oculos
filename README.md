@@ -2,8 +2,9 @@
 <img src = "logo.png" align="center">
 </p>
 
-<video src="./orbit_demo_new.mp4" controls playsinline width="100%">
-  <a href="./orbit_demo_new.mp4">Download demo video</a>
+<video controls playsinline width="100%">
+  <source src="orbit_demo_new.mp4" type="video/mp4">
+  <a href="orbit_demo_new.mp4">Download demo video</a>
 </video>
 
 
