@@ -30,7 +30,6 @@ Most frameworks either hide everything in a black box, or hand you raw tools wit
 
 Neither works in production.
 
----
 
 ## Orbit
 
@@ -43,7 +42,6 @@ Instead of one monolithic agent, Orbit breaks execution into **independent steps
 
 Each step runs its own model, has its own budget, and returns typed output. All steps share context.
 
----
 
 ## Why this matters
 
@@ -55,7 +53,6 @@ Each step runs its own model, has its own budget, and returns typed output. All 
 
 This turns agents from **demos into usable systems**.
 
----
 
 ## Key difference
 
@@ -65,7 +62,6 @@ Most agents see pixels.
 
 It reads the OS accessibility tree — no screenshots, no DOM hacks. Works across desktop apps and browsers with lower token usage.
 
----
 
 ## Quickstart
 
@@ -94,7 +90,6 @@ Set your API key — Orbit supports any model via [LiteLLM](https://docs.litellm
 export GEMINI_API_KEY="your-key"   # or OPENAI_API_KEY / ANTHROPIC_API_KEY
 ```
 
----
 
 ## Composable SDK
 
@@ -149,7 +144,6 @@ async def main():
 asyncio.run(main())
 ```
 
----
 
 ## The idea
 
@@ -162,7 +156,6 @@ Orbit gives you:
 - **steps** instead of guesswork
 - **control** instead of hope
 
----
 
 ## Custom actions
 
@@ -202,7 +195,6 @@ async def main():
 asyncio.run(main())
 ```
 
----
 
 ## Install from source
 
@@ -229,7 +221,6 @@ macOS users: grant accessibility permissions as described [here](https://github.
 
 </details>
 
----
 
 ## Support matrix
 
@@ -242,13 +233,11 @@ macOS users: grant accessibility permissions as described [here](https://github.
 | Python | 3.10 · 3.11 · 3.12 · 3.13 |
 |---|---|
 
----
 
 ## Safety
 
 No permanent file deletion — destructive operations go to Trash/Recycle Bin. Disk writes require explicit human approval via a configurable callback.
 
----
 
 ## License
 
