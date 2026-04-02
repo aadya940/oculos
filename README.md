@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://youtu.be/nll7Mmzwh00">
-    <img src="demo-preview.svg" width="720" alt="Watch Orbit in action">
+    <img src="demo_preview.svg" width="720" alt="Watch Orbit in action">
   </a>
 </p>
 
