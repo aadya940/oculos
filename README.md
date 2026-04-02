@@ -70,6 +70,9 @@ pip install orbit-cua
 ```
 
 ```python
+from dotenv import load_dotenv
+load_dotenv()
+
 from orbit import Agent
 import asyncio
 
@@ -96,6 +99,10 @@ export GEMINI_API_KEY="your-key"   # or OPENAI_API_KEY / ANTHROPIC_API_KEY
 When you need precision, drop to the SDK:
 
 ```python
+from dotenv import load_dotenv
+load_dotenv()
+
+
 from orbit import Do, Read, Check, Navigate, session
 from pydantic import BaseModel
 import asyncio
