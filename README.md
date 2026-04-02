@@ -2,8 +2,6 @@
   <img src="logo.png" alt="Orbit logo">
 </p>
 
-<h1 align="center">Orbit</h1>
-
 <p align="center">
   <strong>Autonomous agents are demos. Controlled agents are products.</strong>
 </p>
