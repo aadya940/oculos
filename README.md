@@ -46,7 +46,7 @@ Each step runs its own model, has its own budget, and returns typed output. All 
 ## Why this matters
 
 - Use a cheap model for simple clicks, a powerful one for complex reasoning
-- Cap LLM calls per step — nothing runs forever
+- Cap LLM calls per step , nothing runs forever
 - Inject guidance mid-execution when the agent is struggling
 - Extract structured data directly into Pydantic models
 - Toggle `planner=False` for low-latency direct execution
@@ -60,7 +60,7 @@ Most agents see pixels.
 
 **Orbit sees the UI.**
 
-It reads the OS accessibility tree — no screenshots, no DOM hacks. Works across desktop apps and browsers with lower token usage.
+It reads the OS accessibility tree , no screenshots, no DOM hacks. Works across desktop apps and browsers with lower token usage.
 
 
 ## Quickstart
@@ -84,7 +84,7 @@ async def main():
 asyncio.run(main())
 ```
 
-Set your API key — Orbit supports any model via [LiteLLM](https://docs.litellm.ai/):
+Set your API key , Orbit supports any model via [LiteLLM](https://docs.litellm.ai/):
 
 ```bash
 export GEMINI_API_KEY="your-key"   # or OPENAI_API_KEY / ANTHROPIC_API_KEY
@@ -236,9 +236,9 @@ macOS users: grant accessibility permissions as described [here](https://github.
 
 ## Safety
 
-No permanent file deletion — destructive operations go to Trash/Recycle Bin. Disk writes require explicit human approval via a configurable callback.
+No permanent file deletion , destructive operations go to Trash/Recycle Bin. Disk writes require explicit human approval via a configurable callback.
 
 
 ## License
 
-Apache 2.0 — Special thanks to [OculOS](https://github.com/huseyinstif/oculos) and the open-source packages that make this possible.
+Apache 2.0 , Special thanks to [OculOS](https://github.com/huseyinstif/oculos) and the open-source packages that make this possible.
