@@ -169,6 +169,9 @@ Orbit gives you:
 Build reusable, domain-specific actions by subclassing `BaseActionAgent`:
 
 ```python
+from dotenv import load_dotenv
+load_dotenv()
+
 from orbit import BaseActionAgent, Navigate, session
 from pydantic import BaseModel
 import asyncio
