@@ -1,25 +1,111 @@
-<p>
-<img src = "logo.png" align="center">
+<p align="center">
+  <img src="logo.png" alt="Orbit logo">
 </p>
 
-- **[Watch demo (MP4)](./orbit_demo_new.mp4)** — opens the file on GitHub (use the **Download** / **View raw** control there to play in the browser).
-- For an **inline** preview in the README, add a short **animated GIF** (e.g. `orbit_demo.gif`) and reference it like the logo: `![Demo](orbit_demo.gif)`.
+<p align="center">
+  <strong>Autonomous agents are demos. Controlled agents are products.</strong>
+</p>
 
-Orbit is a composable toolkit for building Computer Use Agents (CUAs) focused on providing structure and control. It provides both a standalone multi-step agent and a composable SDK.
+---
 
-Most CUA frameworks either automate the complete task as a black box or expose raw tools with no structure. Orbit sits in between , natural language controls the screen, Python controls the flow. Each primitive (`Do`, `Read`, `Check`, `Navigate`, `Fill`) is an independent agent with its own budget, model, and typed output, but they share context within a session. This means you can use a lightweight model for simple clicks and a heavier model for complex tasks, control max LLM calls per step, and extract structured data from the screen into Pydantic models. Also, if you realise the agent is struggling at a particular step, you can pass in some extra guidance through the `extra_info` kwarg, this lets you control the stepwise information flow. We also let you use `planner=False` for lower-latency direct execution on simple steps, or keep the default `planner=True` for decomposing on complex tasks to multiple simpler tasks. Orbit uses the OS accessibility tree instead of screenshots or DOM parsing, which means a bit less token usage and direct access to UI elements across both desktop apps and browsers.
+<p align="center">
+  <a href="https://youtu.be/nll7Mmzwh00">
+    <img src="demo_preview.svg" width="720" alt="Watch Orbit in action">
+  </a>
+</p>
+
+---
+
+## The problem
+
+AI agents can use computers now.
+
+But in practice:
+- they loop
+- they click the wrong thing
+- they get stuck on simple steps
+- they're impossible to steer mid-task
+
+Most frameworks either hide everything in a black box, or hand you raw tools with no structure.
+
+Neither works in production.
+
+
+## Orbit
+
+Natural language controls the screen.  
+Python controls the flow.
+
+Instead of one monolithic agent, Orbit breaks execution into **independent steps**:
+
+`Do` · `Read` · `Check` · `Navigate` · `Fill`
+
+Each step runs its own model, has its own budget, and returns typed output. All steps share context.
+
+
+## Why this matters
+
+- Use a cheap model for simple clicks, a powerful one for complex reasoning
+- Cap LLM calls per step , nothing runs forever
+- Inject guidance mid-execution when the agent is struggling
+- Extract structured data directly into Pydantic models
+- Toggle `planner=False` for low-latency direct execution
+
+This turns agents from **demos into usable systems**.
+
+
+## Key difference
+
+Most agents see pixels.
+
+**Orbit sees the UI.**
+
+It reads the OS accessibility tree , no screenshots, no DOM hacks. Works across desktop apps and browsers with lower token usage.
+
+
+## Quickstart
+
+```bash
+pip install orbit-cua
+```
+
+```python
+from dotenv import load_dotenv
+load_dotenv()
+
+from orbit import Agent
+import asyncio
+
+async def main():
+    result = await Agent(
+        task="Open Chrome and go to Wikipedia",
+        llm="gemini-3-pro-preview",
+        verbose=True,
+    ).run()
+    print(result.status)
+
+asyncio.run(main())
+```
+
+Set your API key , Orbit supports any model via [LiteLLM](https://docs.litellm.ai/):
+
+```bash
+export GEMINI_API_KEY="your-key"   # or OPENAI_API_KEY / ANTHROPIC_API_KEY
+```
+
 
 ## Composable SDK
 
-For more controlled workflows, use verbs with a shared session in a pythonic way:
+When you need precision, drop to the SDK:
 
 ```python
-from orbit import Do, Read, Check, Navigate, Fill, session
+from dotenv import load_dotenv
+load_dotenv()
+
+
+from orbit import Do, Read, Check, Navigate, session
 from pydantic import BaseModel
 import asyncio
-from dotenv import load_dotenv
-
-load_dotenv()
 
 class Product(BaseModel):
     name: str
@@ -30,117 +116,68 @@ class ProductList(BaseModel):
     products: list[Product]
 
 async def main():
-    # Use lighter model(s) or stronger model(s).
     action_model = "gemini-3-flash-preview"
 
     async with session() as s:
         await Navigate(
             "https://www.amazon.com/s?k=mechanical+keyboard",
-            session=s,
-            llm=action_model,
-            max_steps=30,
-            planner=False,
+            session=s, llm=action_model, max_steps=30, planner=False,
             extra_info="Avoid bookmark bar links; use direct navigation tools first.",
             verbose=True,
         ).run()
 
         if await Check(
             "The current page is a Captcha page and `Continue Shopping` button is visible",
-            session=s,
-            llm=action_model,
-            max_steps=30,
-            verbose=True,
-            planner=False,
+            session=s, llm=action_model, max_steps=30, planner=False,
         ).check():
             await Do(
-                "First click on the `Continue Shopping` button, then solve the Captcha using the Screenshot tool.",
-                session=s,
-                llm=action_model,
-                max_steps=30,
-                verbose=True,
-                planner=False,
+                "Click `Continue Shopping`, then solve the Captcha.",
+                session=s, llm=action_model, max_steps=30,
             ).run()
 
         products = await Read(
-            "All the search results",
+            "All search results",
             schema=ProductList,
-            session=s,
-            llm=action_model,
-            max_steps=30,
-            verbose=True,
+            session=s, llm=action_model, max_steps=30, verbose=True,
         ).run()
-
-        if products.status != "success" or products.output is None:
-            raise RuntimeError(f"Read failed: status={products.status} summary={products.summary!r}")
 
         cheapest = min(products.output.products, key=lambda p: p.price)
-        await Do(
-            f"click on '{cheapest.name}'",
-            session=s,
-            llm=action_model,
-            max_steps=30,
-            verbose=True,
-        ).run()
 
-        if await Check(
-            "Add to Cart button is visible",
-            session=s,
-            llm=action_model,
-            max_steps=30,
-            planner=False,
-            verbose=True,
-        ).check():
-            await Do(
-                "click Add to Cart",
-                session=s,
-                llm=action_model,
-                max_steps=30,
-                verbose=True,
-            ).run()
+        await Do(f"click on '{cheapest.name}'", session=s, llm=action_model, max_steps=30).run()
+
+        if await Check("Add to Cart button is visible", session=s, llm=action_model, max_steps=30).check():
+            await Do("click Add to Cart", session=s, llm=action_model, max_steps=30).run()
 
 asyncio.run(main())
 ```
 
-## Standalone Agent
 
-For one-shot tasks, just describe what you want:
+## The idea
 
-```python
-from orbit import Agent
-import asyncio
+Agents shouldn't be one giant prompt.
 
-async def main():
-    result = await Agent(
-        task="Open Chrome and navigate to Wikipedia",
-        llm="gemini-3-pro-preview",
-        planner=False,  
-        verbose=True,
-    ).run()
-    print(result.status, result.summary)
+They should be composable systems.
 
-asyncio.run(main())
-```
+Orbit gives you:
+- **verbs** instead of prompts
+- **steps** instead of guesswork
+- **control** instead of hope
 
-## Implementing Custom Verb 
 
-You can create reusable domain-specific actions by subclassing `BaseActionAgent` and 
-defining both the task prompt and output schema.
+## Custom actions
+
+Build reusable, domain-specific actions by subclassing `BaseActionAgent`:
 
 ```python
+from dotenv import load_dotenv
+load_dotenv()
+
 from orbit import BaseActionAgent, Navigate, session
 from pydantic import BaseModel
 import asyncio
 
-
-class Product(BaseModel):
-    name: str
-    price: float
-    in_stock: bool
-
-
 class ProductList(BaseModel):
-    products: list[Product]
-
+    products: list[dict]
 
 class ReadTopProducts(BaseActionAgent):
     def __init__(self, category: str, **kw):
@@ -149,31 +186,21 @@ class ReadTopProducts(BaseActionAgent):
 
     def task_prompt(self) -> str:
         return (
-            f"OBSERVE: Read top products for category '{self.category}' from the current page.\n"
-            "Extract product name, price, and stock status only. "
-            "Do not click or navigate."
+            f"Read top products for '{self.category}' from the current page. "
+            "Extract name, price, and stock status only. Do not click or navigate."
         )
 
     def output_schema(self):
         return ProductList
 
-
 async def main():
     async with session() as s:
         await Navigate("https://www.amazon.com/s?k=mechanical+keyboard", session=s).run()
-
         result = await ReadTopProducts(
             category="mechanical keyboard",
-            session=s,
-            llm="gemini-3-flash-preview",
-            verbose=True,
-            planner=False,
-            extra_info="Only include visible, on-page product cards.",
+            session=s, llm="gemini-3-flash-preview", verbose=True,
         ).run()
-
-        print(result.status)
-        if result.output:
-            print(result.output.products[:3])
+        print(result.output.products[:3])
 
 asyncio.run(main())
 ```
@@ -184,71 +211,49 @@ See [`examples/`](examples/) for full end-to-end scripts, including a LinkedIn E
 
 ## Installation
 
-Install from PyPI:
+## Install from source
 
-```bash
-pip install orbit-cua
-```
-
-Install from Source:
+<details>
+<summary>Build from source (requires Rust)</summary>
 
 ```bash
 git clone --recurse-submodules https://github.com/aadya940/orbit.git
 cd orbit
 
-# Build the OculOS daemon (requires Rust)
 cd oculos && cargo build --release && cd ..
 mkdir -p orbit/_bin
-# Windows:
+
+# Linux/macOS
+cp oculos/target/release/oculos orbit/_bin/oculos
+
+# Windows
 copy oculos\target\release\oculos.exe orbit\_bin\oculos.exe
-# Linux/macOS:
-# cp oculos/target/release/oculos orbit/_bin/oculos
 
 pip install .
 ```
 
-macOS users might need to grant additional permissions for UI Interaction as defined [here](https://github.com/huseyinstif/oculos?tab=readme-ov-file#macos-grant-accessibility-permission).
+macOS users: grant accessibility permissions as described [here](https://github.com/huseyinstif/oculos?tab=readme-ov-file#macos-grant-accessibility-permission).
 
-Set your API key for whichever provider you use. Orbit supports any model via [LiteLLM](https://docs.litellm.ai/):
+</details>
 
-```bash
-# Gemini
-export GEMINI_API_KEY="your-key"
-
-# OpenAI
-export OPENAI_API_KEY="your-key"
-
-# Anthropic
-export ANTHROPIC_API_KEY="your-key"
-```
 
 ## Support matrix
 
-Pre-built wheels on PyPI cover the combinations below.
+| OS | Architectures |
+|---|---|
+| **Windows** | x86-64 (`win_amd64`) |
+| **Linux** | x86-64 (`manylinux`) |
+| **macOS** | Intel + Apple Silicon (`universal2`) |
 
-| OS | Architectures | Notes |
-| ---- | ------------- | ----- |
-| **Windows** | 64-bit (`win_amd64`) | — |
-| **Linux** | x86-64 (`manylinux`) | glibc-based manylinux tags (see filenames on PyPI) |
-| **macOS** | Intel + Apple Silicon (`universal2`) | Single wheel per Python version |
-
-| | Supported |
-| -- | -- |
-| **Python** | 3.10 · 3.11 · 3.12 · 3.13 |
-
-**Not published yet (install from source or wait for a future release):** Linux **aarch64**, **musl** / Alpine, 32-bit, and other niche targets.
-
+| Python | 3.10 · 3.11 · 3.12 · 3.13 |
+|---|---|
 
 
 ## Safety
 
-Orbit never permanently deletes files , destructive operations go to Trash/Recycle Bin. Disk writes require human approval via a configurable callback.
+No permanent file deletion , destructive operations go to Trash/Recycle Bin. Disk writes require explicit human approval via a configurable callback.
+
 
 ## License
 
-Apache License 2.0
-
-### Special Thanks to 
-
-[OculOS](https://github.com/huseyinstif/oculos)
-and other open-source packages used ...
+Apache 2.0 , Special thanks to [OculOS](https://github.com/huseyinstif/oculos) and the open-source packages that make this possible.
