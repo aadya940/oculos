@@ -58,12 +58,12 @@ If omitted, edit `DEFAULT_APPLICANT_INFO` in the script.
 ### How it works
 The script uses Orbit's verb pattern, each step is a short-horizon agent task, Python drives the state machine between them:
 1. **Navigate** once to the LinkedIn search page
-2. **Do** — click an unapplied job title
-3. **Read** (typed) — extract `JobPanelState` from the right panel
-4. **Do** — click Easy Apply
-5. **Read** (typed) — extract `WizardPageState` (buttons, unfilled fields)
-6. **Do** — fill empty fields using applicant info
-7. **Do** — click Next / Review / Submit
+2. **Do** click an unapplied job title
+3. **Read** (typed) extract `JobPanelState` from the right panel
+4. **Do** click Easy Apply
+5. **Read** (typed) extract `WizardPageState` (buttons, unfilled fields)
+6. **Do** fill empty fields using applicant info
+7. **Do** click Next / Review / Submit
 8. Repeat 5-7 until submitted, then loop back to step 2
 
 No re-navigation between jobs, one session handles the entire run.
