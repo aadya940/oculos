@@ -946,6 +946,8 @@ async def take_screenshot(tool_context: ToolContext) -> Dict[str, Any]:
         buffer = BytesIO()
         screenshot.save(buffer, format="JPEG")
         image_bytes = buffer.getvalue()
+        if len(image_bytes) < 100:
+            return {"status": "error", "message": "Screenshot encoding failed — empty or corrupt JPEG"}
 
         artifact = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
         await tool_context.save_artifact(filename="screenshot.jpg", artifact=artifact)

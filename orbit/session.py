@@ -5,6 +5,7 @@ import logging
 from typing import Optional
 
 from google.adk.sessions import InMemorySessionService
+from google.adk.artifacts import InMemoryArtifactService
 
 from .daemon import OculOSManager
 from ._ui.toast import run_toast_ui
@@ -29,6 +30,7 @@ class Session:
         self._daemon = OculOSManager()
         self._started = False
         self._session_service = InMemorySessionService()
+        self._artifact_service = InMemoryArtifactService()
         self._adk_session = None
 
     async def __aenter__(self) -> "Session":
@@ -66,6 +68,10 @@ class Session:
     @property
     def session_service(self) -> InMemorySessionService:
         return self._session_service
+
+    @property
+    def artifact_service(self) -> InMemoryArtifactService:
+        return self._artifact_service
 
     @property
     def adk_session(self):
