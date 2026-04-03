@@ -205,6 +205,11 @@ async def main():
 asyncio.run(main())
 ```
 
+## Examples
+
+See [`examples/`](examples/) for full end-to-end scripts, including a LinkedIn Easy Apply bot that applies to jobs autonomously.
+
+## Installation
 
 ## Install from source
 
