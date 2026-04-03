@@ -147,17 +147,38 @@ def make_inject_screenshot_callback(
             )
 
         if remaining <= _BUDGET_WARNING_THRESHOLD and llm_request.contents:
-            llm_request.contents.append(
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part(
-                            text=f"[BUDGET] {remaining} LLM calls remaining. "
-                            "Finish the current step now and return."
-                        )
-                    ],
-                )
+            budget_part = types.Part(
+                text=f"[BUDGET] {remaining} LLM calls remaining. "
+                "Finish the current step now and return."
             )
+            # Merge into last user content to avoid breaking role alternation.
+            last = llm_request.contents[-1]
+            if last.role == "user" and last.parts:
+                last.parts.append(budget_part)
+            else:
+                llm_request.contents.append(
+                    types.Content(role="user", parts=[budget_part])
+                )
+
+        # ── Truncate oversized function responses ──────────────────
+        # Large accessibility tree / element dumps can cause Gemini
+        # to reject the request with INVALID_ARGUMENT.
+        _MAX_RESP_CHARS = 8000
+        for c in llm_request.contents or []:
+            for p in c.parts or []:
+                if (
+                    hasattr(p, "function_response")
+                    and p.function_response
+                    and p.function_response.response
+                ):
+                    resp_str = str(p.function_response.response)
+                    if len(resp_str) > _MAX_RESP_CHARS:
+                        truncated = resp_str[:_MAX_RESP_CHARS] + "\n...[TRUNCATED]"
+                        p.function_response.response = {
+                            "status": "success",
+                            "note": "Response truncated to fit context window.",
+                            "data": truncated,
+                        }
 
         if not llm_request.contents:
             return None
@@ -173,7 +194,13 @@ def make_inject_screenshot_callback(
                 response = part.function_response.response
                 if response.get("status") == "success":
                     artifact = await callback_context.load_artifact("screenshot.jpg")
-                    if artifact and artifact.inline_data:
+                    if (
+                        artifact
+                        and artifact.inline_data
+                        and artifact.inline_data.data
+                        and isinstance(artifact.inline_data.data, bytes)
+                        and len(artifact.inline_data.data) > 100
+                    ):
                         llm_request.contents.append(
                             types.Content(
                                 role="user",
@@ -187,6 +214,10 @@ def make_inject_screenshot_callback(
                                     types.Part(text="This is the current screenshot."),
                                 ],
                             )
+                        )
+                    else:
+                        log.warning(
+                            "Skipping screenshot injection — artifact data missing or corrupt."
                         )
         return None
 

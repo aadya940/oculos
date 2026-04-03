@@ -12,6 +12,7 @@ from google.adk.apps.app import App, EventsCompactionConfig
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+from google.genai.errors import ClientError
 from google.adk.artifacts import InMemoryArtifactService
 
 from .agents import (
@@ -197,8 +198,15 @@ class Agent:
         self._errors: list[str] = []
         self._saw_request_human = False
 
-        # Reuse ADK session from orbit Session if available (shared state across verbs).
-        if self._session and hasattr(self._session, "session_service"):
+        # Session reuse strategy:
+        # - planner=True  → reuse ADK session so the planner retains context across verbs
+        # - planner=False → fresh session per verb (no planner to benefit from history,
+        #   and accumulated tool responses can cause Gemini INVALID_ARGUMENT errors)
+        reuse_session = (
+            self.planner and self._session and hasattr(self._session, "session_service")
+        )
+
+        if reuse_session:
             session_service = self._session.session_service
             if self._session.adk_session is not None:
                 cached = self._session.adk_session
@@ -218,6 +226,17 @@ class Agent:
                     state={},
                 )
                 self._session.adk_session = session
+        elif self._session and hasattr(self._session, "session_service"):
+            # planner=False with a session: fresh ADK session each time,
+            # but still use the session's service for consistency.
+            session_service = self._session.session_service
+            session_id = f"verb_{int(time.time() * 1000)}"
+            session = await session_service.create_session(
+                app_name="desktop_app",
+                user_id="local_admin",
+                session_id=session_id,
+                state={},
+            )
         else:
             session_service = InMemorySessionService()
             session = await session_service.create_session(
@@ -256,18 +275,24 @@ class Agent:
 
         root_agent, _desktop_agent = build_agents(**build_kwargs)
 
+        # NOTE: EventsCompactionConfig disabled — ADK compaction can corrupt
+        # function_call/function_response pairs, causing Gemini to reject
+        # subsequent requests with 400 INVALID_ARGUMENT. See ADK issue #4740.
         app = App(
             name="desktop_app",
             root_agent=root_agent,
-            events_compaction_config=EventsCompactionConfig(
-                compaction_interval=3,
-                overlap_size=1,
-            ),
         )
+        # Reuse artifact service from orbit Session so screenshots persist
+        # across verbs; fall back to a fresh one for standalone Agent usage.
+        if self._session and hasattr(self._session, "artifact_service"):
+            artifact_service = self._session.artifact_service
+        else:
+            artifact_service = InMemoryArtifactService()
+
         runner = Runner(
             app=app,
             session_service=session_service,
-            artifact_service=InMemoryArtifactService(),
+            artifact_service=artifact_service,
         )
         content = types.Content(role="user", parts=[types.Part(text=prompt)])
         events = runner.run_async(
@@ -281,8 +306,20 @@ class Agent:
             self._latency.start_run()
         self._last_time = time.time()
 
-        async for event in events:
-            self._dispatch_event(event)
+        try:
+            async for event in events:
+                self._dispatch_event(event)
+        except ClientError as e:
+            log.error(
+                "Gemini API error at call %d: %s",
+                (
+                    self._budget_counter.get("call_count", 0)
+                    if self._budget_counter
+                    else "?"
+                ),
+                e,
+            )
+            self._errors.append(f"API error: {e}")
 
         self._ui.step_done()
 
