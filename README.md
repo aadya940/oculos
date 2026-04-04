@@ -60,7 +60,7 @@ Most agents see pixels.
 
 **Orbit sees the UI.**
 
-It reads the OS accessibility tree , no screenshots, no DOM hacks. Works across desktop apps and browsers with lower token usage.
+It reads the OS accessibility tree , screenshots only when needed, no DOM hacks. Works across desktop apps and browsers with lower token usage.
 
 
 ## Quickstart
