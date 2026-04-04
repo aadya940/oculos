@@ -43,6 +43,7 @@ from ._tools.clipboard import (
 from ._tools.search import duckduckgo_search
 from ._tools.filesystem import (
     get_system_info,
+    find_installed_apps,
     read_file,
     read_pdf,
     read_csv,
@@ -305,6 +306,7 @@ def build_desktop_agent(
             create_directory_approval,
             find_in_file,
             get_system_info,
+            find_installed_apps,
             press_hotkey,
             navigate_to_url,
             launch_and_get_pid,
