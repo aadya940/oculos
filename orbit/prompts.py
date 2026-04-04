@@ -51,6 +51,16 @@ available binary names. Do NOT guess or hardcode executable names.
    Never hardcode or guess paths or usernames.
    .pdf → read_pdf   |   .txt / .py / .json / .csv → read_file
 
+── TEXT & WAITING ────────────────────────────────────────────────────
+6b. get_page_text(pid) — extract all visible text from a window in one call.
+    Much cheaper than get_window_tree when you only need text content.
+6c. wait_for_text(pid, text, timeout) — block until text appears on screen.
+    Use instead of polling with screenshots for loading states or confirmations.
+
+── SHELL ────────────────────────────────────────────────────────────
+6d. run_shell(command) — execute a shell command (requires human approval).
+    Use for checking installed software, running scripts, or system operations.
+
 ── SPECIFIC PATTERNS ─────────────────────────────────────────────────
 7. DROPDOWNS
    a. select_dropdown_option(pid, dropdown_query=<full field label>, option='...')
