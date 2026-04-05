@@ -82,13 +82,8 @@ impl LinuxUiBackend {
     
             Ok((rt, connection))
         });
-    
-        let (rt, connection) = handle
-            .join()
-            .map_err(|_| anyhow!("AT-SPI2 init thread panicked"))??;
-    
-        tracing::info!("Connected to AT-SPI2 accessibility bus");
-    
+
+        
         Ok(Self {
             connection,
             registry: Arc::new(DashMap::new()),
