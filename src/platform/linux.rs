@@ -52,12 +52,12 @@ impl LinuxUiBackend {
                 .enable_all()
                 .build()
                 .context("Failed to create dedicated Tokio runtime for AT-SPI2")?;
-    
+
             let connection = rt.block_on(async {
                 let session = Connection::session()
                     .await
                     .context("Failed to connect to D-Bus session bus")?;
-    
+
                 let atspi_address: String = session
                     .call_method(
                         Some("org.a11y.Bus"),
@@ -71,32 +71,24 @@ impl LinuxUiBackend {
                     .body()
                     .deserialize()
                     .context("Failed to deserialize AT-SPI bus address")?;
-    
+
                 tracing::info!("Connecting to AT-SPI2 bus at {}", atspi_address);
-    
+
                 zbus::ConnectionBuilder::address(atspi_address.as_str())?
                     .build()
                     .await
                     .context("Failed to connect to AT-SPI2 accessibility bus")
             })?;
-    
+
             Ok((rt, connection))
         });
 
-        
-        Ok(Self {
-            connection,
-            registry: Arc::new(DashMap::new()),
-            rt,
-        })
-    }
-    
         let (rt, connection) = handle
             .join()
             .map_err(|_| anyhow!("AT-SPI2 init thread panicked"))??;
-    
+
         tracing::info!("Connected to AT-SPI2 accessibility bus");
-    
+
         Ok(Self {
             connection,
             registry: Arc::new(DashMap::new()),
