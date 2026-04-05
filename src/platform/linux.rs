@@ -47,7 +47,7 @@ pub struct LinuxUiBackend {
 
 impl LinuxUiBackend {
     pub fn new() -> Result<Self> {
-        let handle = std::thread::spawn(|| -> Result<(tokio::runtime::Runtime, Connection)> {
+        fn atspi_init_thread() -> Result<(tokio::runtime::Runtime, Connection)> {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -68,9 +68,9 @@ impl LinuxUiBackend {
                     )
                     .await
                     .context("Failed to get AT-SPI bus address from org.a11y.Bus")?
-                    .body()
-                    .deserialize()
+                    .body::<String>()
                     .context("Failed to deserialize AT-SPI bus address")?;
+
 
                 tracing::info!("Connecting to AT-SPI2 bus at {}", atspi_address);
 
@@ -81,7 +81,9 @@ impl LinuxUiBackend {
             })?;
 
             Ok((rt, connection))
-        });
+        }
+
+        let handle = std::thread::spawn(atspi_init_thread);
 
         let (rt, connection) = handle
             .join()
@@ -975,7 +977,7 @@ fn send_special_key_linux(key_name: &str) {
                 .args(["key", "--clearmodifiers", &combo])
                 .output();
             return;
-        }
+        },
         _ => return,
     };
 
