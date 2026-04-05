@@ -55,32 +55,36 @@ impl Drop for LinuxUiBackend {
 impl LinuxUiBackend {
     pub fn new() -> Result<Self> {
         fn atspi_init_thread() -> Result<(tokio::runtime::Runtime, Connection)> {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .context("Failed to create dedicated Tokio runtime for AT-SPI2")?;
+            let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("Failed to create dedicated Tokio runtime for AT-SPI2")?;
 
             let connection = rt.block_on(async {
-                let session = Connection::session()
-                    .await
-                    .context("Failed to connect to D-Bus session bus")?;
-
-                let atspi_address: String = session
-                    .call_method(
-                        Some("org.a11y.Bus"),
-                        "/org/a11y/bus",
-                        Some("org.a11y.Bus"),
-                        "GetAddress",
-                        &(),
-                    )
-                    .await
-                    .context("Failed to get AT-SPI bus address from org.a11y.Bus")?
-                    .body::<String>()
-                    .context("Failed to deserialize AT-SPI bus address")?;
-
-
+                let atspi_address: String = {
+                    let session = Connection::session()
+                        .await
+                        .context("Failed to connect to D-Bus session bus")?;
+            
+                    let addr: String = session
+                        .call_method(
+                            Some("org.a11y.Bus"),
+                            "/org/a11y/bus",
+                            Some("org.a11y.Bus"),
+                            "GetAddress",
+                            &(),
+                        )
+                        .await
+                        .context("Failed to get AT-SPI bus address from org.a11y.Bus")?
+                        .body::<String>()
+                        .context("Failed to deserialize AT-SPI bus address")?;
+            
+                    drop(session); // explicitly drop before connecting to AT-SPI bus
+                    addr
+                };
+            
                 tracing::info!("Connecting to AT-SPI2 bus at {}", atspi_address);
-
+            
                 zbus::ConnectionBuilder::address(atspi_address.as_str())?
                     .build()
                     .await
