@@ -563,14 +563,8 @@ impl LinuxUiBackend {
                 let cb = child.name.clone();
                 let cp = child.path.to_string();
 
-                if let Ok(app_proxy) =
-                    Self::make_application_proxy(&self.connection, &cb, &cp).await
-                {
-                    if let Ok(p) = app_proxy.id().await {
-                        if p as u32 == pid {
-                            return Ok((cb, cp));
-                        }
-                    }
+                if self.get_dbus_pid(&cb).await == Some(pid) {
+                    return Ok((cb, cp));
                 }
             }
         }
@@ -601,6 +595,23 @@ impl LinuxUiBackend {
 
     fn block_on<F: std::future::Future<Output = T>, T>(&self, f: F) -> T {
         self.rt.block_on(f)
+    }
+
+    /// Get the real Unix PID for a D-Bus connection by asking the bus daemon.
+    /// Unlike org.a11y.atspi.Application.Id (which apps can set to anything),
+    /// this returns the actual OS process ID tracked by D-Bus itself.
+    async fn get_dbus_pid(&self, bus_name: &str) -> Option<u32> {
+        self.connection
+            .call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus"),
+                "GetConnectionUnixProcessID",
+                &(bus_name,),
+            )
+            .await
+            .ok()
+            .and_then(|msg| msg.body::<u32>().ok())
     }
 }
 
@@ -642,26 +653,8 @@ impl UiBackend for LinuxUiBackend {
                     continue;
                 }
     
-                // Get PID via Application interface
-                let pid = async {
-                    let msg = self.connection
-                        .call_method(
-                            Some(cb.as_str()),
-                            cp_str,
-                            Some("org.freedesktop.DBus.Properties"),
-                            "Get",
-                            &("org.a11y.atspi.Application", "Id"),
-                        )
-                        .await
-                        .ok()?;
-                    let v = msg.body::<zbus::zvariant::Value>().ok()?;
-                    match v {
-                        zbus::zvariant::Value::I32(n) => Some(n as u32),
-                        zbus::zvariant::Value::U32(n) => Some(n),
-                        zbus::zvariant::Value::I64(n) => Some(n as u32),
-                        _ => None,
-                    }
-                }.await.unwrap_or(0);
+                // Get real OS PID via D-Bus connection tracking
+                let pid = self.get_dbus_pid(cb.as_str()).await.unwrap_or(0);
     
                 // Get children of this app (its windows)
                 let app_children: Vec<(String, zbus::zvariant::OwnedObjectPath)> = match self
