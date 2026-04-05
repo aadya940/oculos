@@ -654,8 +654,8 @@ impl UiBackend for LinuxUiBackend {
                 )
                 .await
                 .ok()
-                .and_then(|r| r.body::<zbus::zvariant::OwnedValue>().ok())
-                .and_then(|v| i32::try_from(v.into_inner()).ok())
+                .and_then(|r| r.body::<zbus::zvariant::Value>().ok())
+                .and_then(|v| i32::try_from(v).ok())
                 .unwrap_or(0) as u32;
     
                 // Get children of this app (its windows)
