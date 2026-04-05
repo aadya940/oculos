@@ -549,23 +549,24 @@ impl LinuxUiBackend {
     // ── Find app root for a PID ───────────────────────────────────────────
 
     async fn find_app_root(&self, pid: u32) -> Result<(String, String)> {
-        let registry = Self::make_accessible_proxy(
-            &self.connection,
-            "org.a11y.atspi.Registry",
-            "/org/a11y/atspi/accessible/root",
-        )
-        .await
-        .context("Failed to connect to AT-SPI2 registry")?;
+        // Use GetChildren directly — child_count() returns 0 on this atspi version.
+        let children: Vec<(String, zbus::zvariant::OwnedObjectPath)> = self
+            .connection
+            .call_method(
+                Some("org.a11y.atspi.Registry"),
+                "/org/a11y/atspi/accessible/root",
+                Some("org.a11y.atspi.Accessible"),
+                "GetChildren",
+                &(),
+            )
+            .await
+            .context("Failed to call GetChildren on AT-SPI registry")?
+            .body::<Vec<(String, zbus::zvariant::OwnedObjectPath)>>()
+            .context("Failed to deserialize children")?;
 
-        let child_count = registry.child_count().await.unwrap_or(0);
-        for i in 0..child_count {
-            if let Ok(child) = registry.get_child_at_index(i).await {
-                let cb = child.name.clone();
-                let cp = child.path.to_string();
-
-                if self.get_dbus_pid(&cb).await == Some(pid) {
-                    return Ok((cb, cp));
-                }
+        for (cb, cp) in &children {
+            if self.get_dbus_pid(cb.as_str()).await == Some(pid) {
+                return Ok((cb.clone(), cp.as_str().to_string()));
             }
         }
 
