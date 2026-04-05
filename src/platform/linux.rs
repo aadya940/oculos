@@ -643,13 +643,20 @@ impl UiBackend for LinuxUiBackend {
                 }
     
                 // Get PID via Application interface
-                let pid = if let Ok(ap) =
-                    Self::make_application_proxy(&self.connection, cb, cp_str).await
-                {
-                    ap.id().await.unwrap_or(0) as u32
-                } else {
-                    0
-                };
+                let pid = self
+                .connection
+                .call_method(
+                    Some(cb.as_str()),
+                    cp_str,
+                    Some("org.freedesktop.DBus.Properties"),
+                    "Get",
+                    &("org.a11y.atspi.Application", "Id"),
+                )
+                .await
+                .ok()
+                .and_then(|r| r.body::<zbus::zvariant::OwnedValue>().ok())
+                .and_then(|v| i32::try_from(v.into_inner()).ok())
+                .unwrap_or(0) as u32;
     
                 // Get children of this app (its windows)
                 let app_children: Vec<(String, zbus::zvariant::OwnedObjectPath)> = match self
