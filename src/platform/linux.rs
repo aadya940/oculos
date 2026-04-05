@@ -42,7 +42,14 @@ fn obj_path(s: &str) -> ObjectPath<'_> {
 pub struct LinuxUiBackend {
     connection: Connection,
     registry: IdRegistry,
-    rt: tokio::runtime::Runtime,
+    rt: Arc<tokio::runtime::Runtime>,
+}
+
+impl Drop for LinuxUiBackend {
+    fn drop(&mut self) {
+        let rt = Arc::clone(&self.rt);
+        std::thread::spawn(move || drop(rt));
+    }
 }
 
 impl LinuxUiBackend {
@@ -94,7 +101,7 @@ impl LinuxUiBackend {
         Ok(Self {
             connection,
             registry: Arc::new(DashMap::new()),
-            rt,
+            rt: Arc::new(rt),
         })
     }
 
@@ -608,7 +615,7 @@ impl UiBackend for LinuxUiBackend {
 
             let child_count = registry.child_count().await.unwrap_or(0);
             tracing::info!("Registry child_count: {}", child_count); 
-            
+
             let mut windows = Vec::new();
 
             for i in 0..child_count {
