@@ -358,7 +358,6 @@ impl LinuxUiBackend {
         // noisy ATK assertion spam: "impl_get_CurrentValue: assertion 'ATK_IS_VALUE'"
         let range = match element_type {
             ElementType::Slider
-            | ElementType::SpinButton
             | ElementType::ProgressBar
             | ElementType::ScrollBar => self.get_range_info(bname, opath).await,
             _ => None,
