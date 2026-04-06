@@ -589,9 +589,6 @@ impl LinuxUiBackend {
         })
     }
 
-    /// Search an app's accessibility tree using the bulk Cache approach.
-    /// 1 D-Bus call to get all elements, filter in-memory, then ~3 D-Bus calls
-    /// per matched element for bounds/text/actions.
     async fn search_elements_cached(
         &self,
         app_bus_name: &str,
@@ -600,67 +597,102 @@ impl LinuxUiBackend {
         element_type: Option<&ElementType>,
         interactive_only: bool,
     ) -> Result<Vec<UiElement>> {
-        let items = Self::fetch_cache_items(&self.connection, app_bus_name).await?;
-        tracing::info!(
-            "Cache search: {} items from {} (root={})",
-            items.len(),
-            app_bus_name,
-            root_path
-        );
-        let cache = AppCache::from_items(items);
-
-        let mut results = Vec::new();
-        let query_lower = query.map(|q| q.to_lowercase());
-
-        // DFS traversal entirely in-memory
-        let mut stack = vec![root_path.to_string()];
-        while let Some(path) = stack.pop() {
-            if results.len() >= 500 {
-                break;
+        // Try cache-based search first (1 D-Bus call for all elements)
+        match Self::fetch_cache_items(&self.connection, app_bus_name).await {
+            Ok(items) => {
+                tracing::info!(
+                    "Cache search: {} items from {} (root={})",
+                    items.len(),
+                    app_bus_name,
+                    root_path
+                );
+                let cache = AppCache::from_items(items);
+                let mut results = Vec::new();
+                let query_lower = query.map(|q| q.to_lowercase());
+    
+                // DFS traversal entirely in-memory
+                let mut stack = vec![root_path.to_string()];
+                while let Some(path) = stack.pop() {
+                    if results.len() >= 500 {
+                        break;
+                    }
+                    if let Some(ci) = cache.items.get(&path) {
+                        let mut matches = true;
+                        if let Some(ref q) = query_lower {
+                            let label_match = ci.name.to_lowercase().contains(q.as_str());
+                            let short_match = ci.short_name.to_lowercase().contains(q.as_str());
+                            if !label_match && !short_match {
+                                matches = false;
+                            }
+                        }
+                        if let Some(wanted) = element_type {
+                            if &Self::role_to_element_type(ci.role) != wanted {
+                                matches = false;
+                            }
+                        }
+                        if interactive_only {
+                            let has_interaction = ci.ifaces.contains(Interface::Action)
+                                || ci.ifaces.contains(Interface::EditableText)
+                                || ci.ifaces.contains(Interface::Value);
+                            if !has_interaction {
+                                matches = false;
+                            }
+                        }
+                        if matches {
+                            match self.build_element_from_cache(ci).await {
+                                Ok(elem) => results.push(elem),
+                                Err(e) => tracing::debug!("Skipping element {}: {}", path, e),
+                            }
+                        }
+                        for child_path in cache.children(&path) {
+                            stack.push(child_path.clone());
+                        }
+                    }
+                }
+                Ok(results)
             }
-
-            if let Some(ci) = cache.items.get(&path) {
-                // Filter using cached data (zero D-Bus calls)
-                let mut matches = true;
-
-                if let Some(ref q) = query_lower {
-                    let label_match = ci.name.to_lowercase().contains(q.as_str());
-                    let short_match = ci.short_name.to_lowercase().contains(q.as_str());
-                    if !label_match && !short_match {
-                        matches = false;
+            Err(e) => {
+                // Cache not available (e.g. Chrome) — fall back to per-element
+                // traversal with a hard timeout to prevent hangs/crashes
+                tracing::warn!(
+                    "Cache unavailable for {} ({}), falling back to traversal with 10s timeout",
+                    app_bus_name, e
+                );
+                let mut results = Vec::new();
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    self.search_elements_async(
+                        app_bus_name,
+                        root_path,
+                        query,
+                        element_type,
+                        interactive_only,
+                        &mut results,
+                        0,
+                    ),
+                )
+                .await
+                {
+                    Ok(_) => {
+                        tracing::info!(
+                            "Traversal found {} results for {}",
+                            results.len(),
+                            app_bus_name
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "Traversal timed out for {}, returning {} partial results",
+                            app_bus_name,
+                            results.len()
+                        );
                     }
                 }
-                if let Some(wanted) = element_type {
-                    if &Self::role_to_element_type(ci.role) != wanted {
-                        matches = false;
-                    }
-                }
-                if interactive_only {
-                    let has_interaction = ci.ifaces.contains(Interface::Action)
-                        || ci.ifaces.contains(Interface::EditableText)
-                        || ci.ifaces.contains(Interface::Value);
-                    if !has_interaction {
-                        matches = false;
-                    }
-                }
-
-                if matches {
-                    // Only fetch bounds/text/actions for matched elements
-                    match self.build_element_from_cache(ci).await {
-                        Ok(elem) => results.push(elem),
-                        Err(e) => tracing::debug!("Skipping element {}: {}", path, e),
-                    }
-                }
-
-                // Push children for traversal (from cache, no D-Bus)
-                for child_path in cache.children(&path) {
-                    stack.push(child_path.clone());
-                }
+                Ok(results)
             }
         }
-
-        Ok(results)
     }
+    
 
     // ── Legacy per-element search (fallback) ─────────────────────────────
 
