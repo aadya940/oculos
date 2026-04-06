@@ -14,7 +14,7 @@ use atspi::{
 };
 use zbus::names::BusName;
 use zbus::zvariant::ObjectPath;
-use zbus::Connection;
+use zbus::{CacheProperties, Connection};
 
 use crate::{
     platform::UiBackend,
@@ -157,6 +157,7 @@ impl LinuxUiBackend {
         AccessibleProxy::builder(conn)
             .destination(bus_name(bname))?
             .path(obj_path(opath))?
+            .cache_properties(CacheProperties::No)
             .build()
             .await
             .context("Failed to build AccessibleProxy")
@@ -170,6 +171,7 @@ impl LinuxUiBackend {
         ComponentProxy::builder(conn)
             .destination(bus_name(bname))?
             .path(obj_path(opath))?
+            .cache_properties(CacheProperties::No)
             .build()
             .await
             .context("Failed to build ComponentProxy")
@@ -183,6 +185,7 @@ impl LinuxUiBackend {
         ActionProxy::builder(conn)
             .destination(bus_name(bname))?
             .path(obj_path(opath))?
+            .cache_properties(CacheProperties::No)
             .build()
             .await
             .context("Failed to build ActionProxy")
@@ -196,6 +199,7 @@ impl LinuxUiBackend {
         ApplicationProxy::builder(conn)
             .destination(bus_name(bname))?
             .path(obj_path(opath))?
+            .cache_properties(CacheProperties::No)
             .build()
             .await
             .context("Failed to build ApplicationProxy")
@@ -209,6 +213,7 @@ impl LinuxUiBackend {
         TextProxy::builder(conn)
             .destination(bus_name(bname))?
             .path(obj_path(opath))?
+            .cache_properties(CacheProperties::No)
             .build()
             .await
             .context("Failed to build TextProxy")
@@ -222,6 +227,7 @@ impl LinuxUiBackend {
         ValueProxy::builder(conn)
             .destination(bus_name(bname))?
             .path(obj_path(opath))?
+            .cache_properties(CacheProperties::No)
             .build()
             .await
             .context("Failed to build ValueProxy")
@@ -235,6 +241,7 @@ impl LinuxUiBackend {
         EditableTextProxy::builder(conn)
             .destination(bus_name(bname))?
             .path(obj_path(opath))?
+            .cache_properties(CacheProperties::No)
             .build()
             .await
             .context("Failed to build EditableTextProxy")
