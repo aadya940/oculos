@@ -353,7 +353,16 @@ impl LinuxUiBackend {
             None
         };
 
-        let range = self.get_range_info(bname, opath).await;
+        // Only query Value interface for element types that actually use ranges.
+        // Chrome advertises Value on elements that don't implement it, causing
+        // noisy ATK assertion spam: "impl_get_CurrentValue: assertion 'ATK_IS_VALUE'"
+        let range = match element_type {
+            ElementType::Slider
+            | ElementType::SpinButton
+            | ElementType::ProgressBar
+            | ElementType::ScrollBar => self.get_range_info(bname, opath).await,
+            _ => None,
+        };
         let actions = self
             .collect_actions(bname, opath, &element_type, is_keyboard_focusable)
             .await;
