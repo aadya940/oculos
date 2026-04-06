@@ -1,13 +1,16 @@
 use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 use atspi::{
+    cache::{CacheItem, LegacyCacheItem},
     proxy::accessible::AccessibleProxy, proxy::action::ActionProxy,
     proxy::application::ApplicationProxy, proxy::component::ComponentProxy,
     proxy::editable_text::EditableTextProxy, proxy::text::TextProxy, proxy::value::ValueProxy,
-    CoordType, Role, State,
+    CoordType, Interface, Role, State,
 };
 use zbus::names::BusName;
 use zbus::zvariant::ObjectPath;
@@ -481,7 +484,185 @@ impl LinuxUiBackend {
         actions
     }
 
-    // ── Search helper ─────────────────────────────────────────────────────
+    // ── Cache-based search ──────────────────────────────────────────────
+
+    /// Build a UiElement from cached data, only fetching bounds/text/actions
+    /// via D-Bus for this specific element. Much cheaper than build_element_async
+    /// which also traverses children.
+    async fn build_element_from_cache(&self, ci: &CacheItem) -> Result<UiElement> {
+        let bname = ci.object.name.as_str();
+        let opath = ci.object.path.as_str();
+        let element_type = Self::role_to_element_type(ci.role);
+
+        // States from cache (zero D-Bus calls)
+        let enabled = ci.states.contains(State::Enabled);
+        let focused = ci.states.contains(State::Focused);
+        let is_keyboard_focusable = ci.states.contains(State::Focusable);
+        let is_selected_state = ci.states.contains(State::Selected);
+        let is_checked = ci.states.contains(State::Checked);
+        let is_expanded = ci.states.contains(State::Expanded);
+        let is_expandable = ci.states.contains(State::Expandable);
+
+        // Bounding box — needs D-Bus (1 call, only if Component interface present)
+        let rect = if ci.ifaces.contains(Interface::Component) {
+            self.get_component_rect(bname, opath).await
+        } else {
+            Rect { x: 0, y: 0, width: 0, height: 0 }
+        };
+
+        // Text value — only if Text interface present (1-2 calls)
+        let value = if ci.ifaces.contains(Interface::Text) {
+            self.get_text_value(bname, opath).await
+        } else {
+            None
+        };
+
+        let toggle_state = if element_type == ElementType::CheckBox {
+            Some(if is_checked { ToggleState::On } else { ToggleState::Off })
+        } else {
+            None
+        };
+
+        let is_selected = if is_selected_state { Some(true) } else { None };
+
+        let expand_state = if is_expandable {
+            Some(if is_expanded { ExpandState::Expanded } else { ExpandState::Collapsed })
+        } else {
+            None
+        };
+
+        // Range — only if Value interface present (1-4 calls)
+        let range = if ci.ifaces.contains(Interface::Value) {
+            self.get_range_info(bname, opath).await
+        } else {
+            None
+        };
+
+        // Actions — only if Action or EditableText interface present
+        let actions = if ci.ifaces.contains(Interface::Action)
+            || ci.ifaces.contains(Interface::EditableText)
+            || ci.ifaces.contains(Interface::Value)
+        {
+            self.collect_actions(bname, opath, &element_type, is_keyboard_focusable)
+                .await
+        } else if is_keyboard_focusable {
+            vec!["focus".into()]
+        } else {
+            vec![]
+        };
+
+        let help_text = if ci.name != ci.short_name && !ci.short_name.is_empty() {
+            Some(ci.short_name.clone())
+        } else {
+            None
+        };
+
+        let oculos_id = Uuid::new_v4().to_string();
+        self.registry.insert(
+            oculos_id.clone(),
+            StoredElement {
+                bus_name: bname.to_string(),
+                object_path: opath.to_string(),
+            },
+        );
+
+        Ok(UiElement {
+            oculos_id,
+            element_type,
+            label: ci.name.clone(),
+            value,
+            text_content: None,
+            rect,
+            enabled,
+            focused,
+            is_keyboard_focusable,
+            toggle_state,
+            is_selected,
+            expand_state,
+            range,
+            automation_id: None,
+            class_name: None,
+            help_text,
+            keyboard_shortcut: None,
+            actions,
+            children: vec![],
+        })
+    }
+
+    /// Search an app's accessibility tree using the bulk Cache approach.
+    /// 1 D-Bus call to get all elements, filter in-memory, then ~3 D-Bus calls
+    /// per matched element for bounds/text/actions.
+    async fn search_elements_cached(
+        &self,
+        app_bus_name: &str,
+        root_path: &str,
+        query: Option<&str>,
+        element_type: Option<&ElementType>,
+        interactive_only: bool,
+    ) -> Result<Vec<UiElement>> {
+        let items = Self::fetch_cache_items(&self.connection, app_bus_name).await?;
+        tracing::info!(
+            "Cache search: {} items from {} (root={})",
+            items.len(),
+            app_bus_name,
+            root_path
+        );
+        let cache = AppCache::from_items(items);
+
+        let mut results = Vec::new();
+        let query_lower = query.map(|q| q.to_lowercase());
+
+        // DFS traversal entirely in-memory
+        let mut stack = vec![root_path.to_string()];
+        while let Some(path) = stack.pop() {
+            if results.len() >= 500 {
+                break;
+            }
+
+            if let Some(ci) = cache.items.get(&path) {
+                // Filter using cached data (zero D-Bus calls)
+                let mut matches = true;
+
+                if let Some(ref q) = query_lower {
+                    let label_match = ci.name.to_lowercase().contains(q.as_str());
+                    let short_match = ci.short_name.to_lowercase().contains(q.as_str());
+                    if !label_match && !short_match {
+                        matches = false;
+                    }
+                }
+                if let Some(wanted) = element_type {
+                    if &Self::role_to_element_type(ci.role) != wanted {
+                        matches = false;
+                    }
+                }
+                if interactive_only {
+                    let has_interaction = ci.ifaces.contains(Interface::Action)
+                        || ci.ifaces.contains(Interface::EditableText)
+                        || ci.ifaces.contains(Interface::Value);
+                    if !has_interaction {
+                        matches = false;
+                    }
+                }
+
+                if matches {
+                    // Only fetch bounds/text/actions for matched elements
+                    match self.build_element_from_cache(ci).await {
+                        Ok(elem) => results.push(elem),
+                        Err(e) => tracing::debug!("Skipping element {}: {}", path, e),
+                    }
+                }
+
+                // Push children for traversal (from cache, no D-Bus)
+                for child_path in cache.children(&path) {
+                    stack.push(child_path.clone());
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    // ── Legacy per-element search (fallback) ─────────────────────────────
 
     async fn search_elements_async(
         &self,
@@ -614,14 +795,102 @@ impl LinuxUiBackend {
             .ok()
             .and_then(|msg| msg.body::<u32>().ok())
     }
+
+
+    // ── AT-SPI Cache bulk fetch ──────────────────────────────────────────
+
+    /// How long to wait for a single app's Cache.GetItems() response.
+    const CACHE_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Bulk-fetch all accessible objects for an app via org.a11y.atspi.Cache.GetItems().
+    /// Returns one CacheItem per element in the app's accessibility tree — all in a single
+    /// D-Bus call instead of N×10 individual round-trips.
+    async fn fetch_cache_items(conn: &Connection, app_bus_name: &str) -> Result<Vec<CacheItem>> {
+        let msg = timeout(
+            Self::CACHE_TIMEOUT,
+            conn.call_method(
+                Some(app_bus_name),
+                "/org/a11y/atspi/cache",
+                Some("org.a11y.atspi.Cache"),
+                "GetItems",
+                &(),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow!("Cache.GetItems timed out for {}", app_bus_name))??;
+
+        // Modern format: ((so)(so)(so)iiassusau)  — used by Chrome, GTK apps
+        if let Ok(items) = msg.body::<Vec<CacheItem>>() {
+            return Ok(items);
+        }
+        // Legacy format: ((so)(so)(so)a(so)assusau) — used by Qt apps
+        if let Ok(legacy) = msg.body::<Vec<LegacyCacheItem>>() {
+            // Convert legacy items to modern CacheItem
+            let items = legacy
+                .into_iter()
+                .map(|l| CacheItem {
+                    object: l.object,
+                    app: l.app,
+                    parent: l.parent,
+                    index: 0,
+                    children: l.children.len() as i32,
+                    ifaces: l.ifaces,
+                    short_name: l.short_name,
+                    role: l.role,
+                    name: l.name,
+                    states: l.states,
+                })
+                .collect();
+            return Ok(items);
+        }
+        Err(anyhow!(
+            "Failed to deserialize Cache.GetItems for {}",
+            app_bus_name
+        ))
+    }
 }
 
-// ── UiBackend implementation ──────────────────────────────────────────────────
+/// In-memory index of an app's accessibility tree built from CacheItems.
+/// Allows O(1) lookups and in-memory tree traversal with zero D-Bus calls.
+struct AppCache {
+    items: HashMap<String, CacheItem>,          // obj_path → CacheItem
+    children_of: HashMap<String, Vec<String>>,  // parent_path → child obj_paths
+}
+
+impl AppCache {
+    fn from_items(items: Vec<CacheItem>) -> Self {
+        let mut map = HashMap::with_capacity(items.len());
+        let mut children_of: HashMap<String, Vec<String>> = HashMap::new();
+        for item in items {
+            let obj_path = item.object.path.to_string();
+            let parent_path = item.parent.path.to_string();
+            children_of
+                .entry(parent_path)
+                .or_default()
+                .push(obj_path.clone());
+            map.insert(obj_path, item);
+        }
+        AppCache {
+            items: map,
+            children_of,
+        }
+    }
+
+    /// Get direct children of a node, in order.
+    fn children(&self, obj_path: &str) -> &[String] {
+        self.children_of
+            .get(obj_path)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+}
+
+// ── UiBackend implementation ──────────────────────────────���───────────────────
 
 impl UiBackend for LinuxUiBackend {
     fn list_windows(&self) -> Result<Vec<WindowInfo>> {
         self.block_on(async {
-            // Use GetChildren directly — child_count() property returns 0 on this atspi version
+            // 1. Get registered app bus names from the AT-SPI registry
             let children: Vec<(String, zbus::zvariant::OwnedObjectPath)> = self
                 .connection
                 .call_method(
@@ -635,61 +904,76 @@ impl UiBackend for LinuxUiBackend {
                 .context("Failed to call GetChildren on AT-SPI registry")?
                 .body::<Vec<(String, zbus::zvariant::OwnedObjectPath)>>()
                 .context("Failed to deserialize children")?;
-    
+
             tracing::info!("Registry GetChildren returned {} children", children.len());
-    
+
             let mut windows = Vec::new();
-    
+
             for (cb, cp) in &children {
                 let cp_str = cp.as_str();
-    
-                // Get app name
-                let app_proxy = match Self::make_accessible_proxy(&self.connection, cb, cp_str).await {
-                    Ok(p) => p,
-                    Err(_) => continue,
+
+                // 2. Get real OS PID (1 D-Bus call to the bus daemon, fast)
+                let pid = self.get_dbus_pid(cb.as_str()).await.unwrap_or(0);
+
+                // 3. Bulk-fetch the app's entire accessibility tree via Cache (1 D-Bus call)
+                let cache = match Self::fetch_cache_items(&self.connection, cb.as_str()).await {
+                    Ok(items) => {
+                        tracing::debug!(
+                            "Cache.GetItems for {} returned {} items",
+                            cb,
+                            items.len()
+                        );
+                        AppCache::from_items(items)
+                    }
+                    Err(e) => {
+                        tracing::debug!("Cache.GetItems failed for {}: {}", cb, e);
+                        // Fallback: try to at least get app name via proxy
+                        if let Ok(p) = Self::make_accessible_proxy(&self.connection, cb, cp_str).await {
+                            let app_name = p.name().await.unwrap_or_default();
+                            if !app_name.is_empty() && pid > 0 {
+                                windows.push(WindowInfo {
+                                    pid,
+                                    hwnd: 0,
+                                    title: app_name.clone(),
+                                    exe_name: app_name,
+                                    rect: Rect { x: 0, y: 0, width: 0, height: 0 },
+                                    visible: true,
+                                });
+                            }
+                        }
+                        continue;
+                    }
                 };
-    
-                let app_name = app_proxy.name().await.unwrap_or_default();
+
+                // 4. Get app name from the root node in the cache
+                let app_name = cache
+                    .items
+                    .get(cp_str)
+                    .map(|ci| {
+                        if ci.name.is_empty() {
+                            ci.short_name.clone()
+                        } else {
+                            ci.name.clone()
+                        }
+                    })
+                    .unwrap_or_default();
                 if app_name.is_empty() {
                     continue;
                 }
-    
-                // Get real OS PID via D-Bus connection tracking
-                let pid = self.get_dbus_pid(cb.as_str()).await.unwrap_or(0);
-    
-                // Get children of this app (its windows)
-                let app_children: Vec<(String, zbus::zvariant::OwnedObjectPath)> = match self
-                    .connection
-                    .call_method(
-                        Some(cb.as_str()),
-                        cp_str,
-                        Some("org.a11y.atspi.Accessible"),
-                        "GetChildren",
-                        &(),
-                    )
-                    .await
-                    .and_then(|r| r.body::<Vec<(String, zbus::zvariant::OwnedObjectPath)>>().map_err(Into::into))
-                {
-                    Ok(c) => c,
-                    Err(_) => vec![],
-                };
-    
+
+                // 5. Find Frame/Window/Dialog children from the cache (zero D-Bus calls)
                 let mut found_window = false;
-    
-                for (wb, wp) in &app_children {
-                    let wp_str = wp.as_str();
-    
-                    if let Ok(win_proxy) =
-                        Self::make_accessible_proxy(&self.connection, wb, wp_str).await
-                    {
-                        let role = win_proxy.get_role().await.unwrap_or(Role::Invalid);
-                        if matches!(role, Role::Frame | Role::Window | Role::Dialog) {
-                            let title = win_proxy.name().await.unwrap_or_default();
-                            let rect = self.get_component_rect(wb, wp_str).await;
+                for child_path in cache.children(cp_str) {
+                    if let Some(ci) = cache.items.get(child_path) {
+                        if matches!(ci.role, Role::Frame | Role::Window | Role::Dialog) {
+                            // Only bounds need a D-Bus call (1 per window, typically 1-3)
+                            let rect = self
+                                .get_component_rect(&ci.object.name, &ci.object.path.to_string())
+                                .await;
                             windows.push(WindowInfo {
                                 pid,
                                 hwnd: 0,
-                                title,
+                                title: ci.name.clone(),
                                 exe_name: app_name.clone(),
                                 rect,
                                 visible: true,
@@ -698,25 +982,20 @@ impl UiBackend for LinuxUiBackend {
                         }
                     }
                 }
-    
-                // Fallback: if no Frame/Window child found, register the app itself
+
+                // 6. Fallback: if no Frame/Window child found, register the app itself
                 if !found_window && pid > 0 {
                     windows.push(WindowInfo {
                         pid,
                         hwnd: 0,
                         title: app_name.clone(),
                         exe_name: app_name,
-                        rect: Rect {
-                            x: 0,
-                            y: 0,
-                            width: 0,
-                            height: 0,
-                        },
+                        rect: Rect { x: 0, y: 0, width: 0, height: 0 },
                         visible: true,
                     });
                 }
             }
-    
+
             Ok(windows)
         })
     }
@@ -743,18 +1022,41 @@ impl UiBackend for LinuxUiBackend {
     ) -> Result<Vec<UiElement>> {
         self.block_on(async {
             let (bus, path) = self.find_app_root(pid).await?;
-            let mut results = Vec::new();
-            self.search_elements_async(
-                &bus,
-                &path,
-                query,
-                element_type,
-                interactive_only,
-                &mut results,
-                0,
-            )
-            .await;
-            Ok(results)
+
+            // Try cache-based search first (1 D-Bus call for all elements)
+            match self
+                .search_elements_cached(&bus, &path, query, element_type, interactive_only)
+                .await
+            {
+                Ok(results) => {
+                    tracing::info!(
+                        "Cache search returned {} results for PID {}",
+                        results.len(),
+                        pid
+                    );
+                    Ok(results)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Cache search failed for PID {}: {}. Falling back to per-element traversal.",
+                        pid,
+                        e
+                    );
+                    // Fallback to legacy per-element traversal
+                    let mut results = Vec::new();
+                    self.search_elements_async(
+                        &bus,
+                        &path,
+                        query,
+                        element_type,
+                        interactive_only,
+                        &mut results,
+                        0,
+                    )
+                    .await;
+                    Ok(results)
+                }
+            }
         })
     }
 
