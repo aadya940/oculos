@@ -1022,43 +1022,20 @@ impl UiBackend for LinuxUiBackend {
     ) -> Result<Vec<UiElement>> {
         self.block_on(async {
             let (bus, path) = self.find_app_root(pid).await?;
-
-            // Try cache-based search first (1 D-Bus call for all elements)
-            match self
+    
+            let results = self
                 .search_elements_cached(&bus, &path, query, element_type, interactive_only)
                 .await
-            {
-                Ok(results) => {
-                    tracing::info!(
-                        "Cache search returned {} results for PID {}",
-                        results.len(),
-                        pid
-                    );
-                    Ok(results)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Cache search failed for PID {}: {}. Falling back to per-element traversal.",
-                        pid,
-                        e
-                    );
-                    // Fallback to legacy per-element traversal
-                    let mut results = Vec::new();
-                    self.search_elements_async(
-                        &bus,
-                        &path,
-                        query,
-                        element_type,
-                        interactive_only,
-                        &mut results,
-                        0,
-                    )
-                    .await;
-                    Ok(results)
-                }
-            }
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Cache search failed for PID {}: {}. Skipping.", pid, e);
+                    vec![]
+                });
+    
+            tracing::info!("Cache search returned {} results for PID {}", results.len(), pid);
+            Ok(results)
         })
     }
+    
 
     fn find_elements_hwnd(
         &self,
